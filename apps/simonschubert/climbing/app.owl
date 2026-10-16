@@ -1,0 +1,742 @@
+app "ifsc" {
+  meta {
+    owl: 8
+    description: "The World Climbing Series on one screen: the next event, results from every stop, and the boulder, lead and speed cup."
+    version: "1.0"
+    license: "MIT"
+    category: "world"
+  }
+  requires { pacman: ["python"] }
+  title: "IFSC"
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 42l15-27 8 12 6-8 13 23z"/>
+    <path d="M18 15V4l9 3.5-9 3.5"/>
+  </svg>"""
+
+  // Season calendar, top 8 of every started category, and the cup (top 12),
+  // from ifsc.results.info. Cached so switching views doesn't fetch again.
+  source board = cmd("""
+python3 - << 'PY'
+import json, os, time, urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from pathlib import Path
+
+VERSION = 4
+CACHE = Path.home() / ".cache" / "omalauncher" / "ifsc-series.json"
+FLAGS = Path.home() / ".cache" / "ifsc-flags"
+ROOT = "https://ifsc.results.info"
+UA = {"User-Agent": "omarchy-widgets/ifsc", "Referer": ROOT + "/", "Accept": "application/json"}
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+CUP_NAMES = (
+    "BOULDER Men", "BOULDER Women", "LEAD Men", "LEAD Women", "SPEED Men", "SPEED Women",
+)
+KIND_ORDER = {"boulder": 0, "lead": 1, "speed": 2, "relay": 3}
+
+def get(path):
+    req = urllib.request.Request(ROOT + path, headers=UA)
+    with urllib.request.urlopen(req, timeout=20) as res:
+        return json.load(res)
+
+def kind_of(name):
+    n = (name or "").upper()
+    if "RELAY" in n:
+        return "relay"
+    if n.startswith("BOULDER"):
+        return "boulder"
+    if n.startswith("LEAD"):
+        return "lead"
+    if n.startswith("SPEED"):
+        return "speed"
+    return "other"
+
+def gender_of(name):
+    n = name or ""
+    if n.endswith("Men"):
+        return "men"
+    if n.endswith("Women"):
+        return "women"
+    if n.endswith("Mixed"):
+        return "mixed"
+    return ""
+
+def short_event(name):
+    for prefix in ("World Climbing Series ", "IFSC Climbing World Cup ", "IFSC World Cup ", "IFSC "):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    if len(name) >= 5 and name[-4:].isdigit() and name[-5] == " ":
+        name = name[:-5]
+    return name.strip()
+
+def parse_utc(text):
+    raw = text.replace(" UTC", "").strip()
+    dt = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+def fmt_dates(a, b):
+    da = datetime.strptime(a, "%Y-%m-%d")
+    db = datetime.strptime(b, "%Y-%m-%d")
+    if da == db:
+        return "%d %s" % (da.day, MONTHS[da.month - 1])
+    if da.month == db.month and da.year == db.year:
+        return "%d–%d %s" % (da.day, db.day, MONTHS[da.month - 1])
+    return "%d %s – %d %s" % (da.day, MONTHS[da.month - 1], db.day, MONTHS[db.month - 1])
+
+def pretty(word):
+    if not word or not word.isupper():
+        return word
+    text = word.title()
+    if text.startswith("Mc") and len(text) > 2:
+        text = "Mc" + text[2].upper() + text[3:]
+    return text
+
+def person(a):
+    first = pretty((a.get("firstname") or "").strip())
+    last = pretty((a.get("lastname") or "").strip())
+    if first or last:
+        return (first + " " + last).strip()
+    return (a.get("name") or "").strip()
+
+def clean_score(value):
+    if value is None:
+        return ""
+    text = str(value).split(" (")[0].strip()
+    if text.upper() == "FALSE START":
+        return "FS"
+    return text
+
+def whole(value):
+    text = clean_score(value)
+    try:
+        num = float(text)
+    except ValueError:
+        return text
+    if abs(num - round(num)) < 0.05:
+        return str(int(round(num)))
+    return text
+
+def last_score(athlete):
+    scored = [r for r in (athlete.get("rounds") or []) if r.get("score") not in (None, "")]
+    if not scored:
+        return ""
+    return clean_score(scored[-1].get("score"))
+
+def round_name(res):
+    started = [r for r in (res.get("category_rounds") or []) if r.get("status") not in (None, "pending")]
+    if not started:
+        return ""
+    return (started[-1].get("name") or "").lower()
+
+def slug(first, last):
+    raw = (first + "-" + last).lower()
+    for a, b in (("ø", "o"), ("æ", "ae"), ("ß", "ss"), ("é", "e"), ("è", "e"), ("á", "a"), ("í", "i"), ("ó", "o"), ("ú", "u"), ("ñ", "n"), ("ü", "u"), ("ä", "a"), ("ö", "o")):
+        raw = raw.replace(a, b)
+    out = []
+    prev = False
+    for ch in raw:
+        ok = ("a" <= ch <= "z") or ("0" <= ch <= "9")
+        if ok:
+            out.append(ch)
+            prev = False
+        elif not prev:
+            out.append("-")
+            prev = True
+    return "".join(out).strip("-") or "athlete"
+
+def athlete_row(a, place_key):
+    name = person(a)
+    country = a.get("country") or ""
+    rank = a.get("rank")
+    return {
+        "key": "%s-%s" % (rank, name),
+        "id": a.get("athlete_id") or 0,
+        "rank": rank,
+        "name": name,
+        "country": country if len(country) == 3 and country.isalpha() else "",
+        "score": last_score(a) if place_key == "result" else whole(a.get("score")),
+    }
+
+def trim_result(res):
+    rows = []
+    for a in (res.get("ranking") or [])[:8]:
+        rows.append(athlete_row(a, "result"))
+    label_name = res.get("dcat") or ""
+    kind = kind_of(label_name)
+    gen = gender_of(label_name)
+    return {
+        "id": None,
+        "kind": kind,
+        "label": (kind + " " + gen).strip(),
+        "status": res.get("status") or "",
+        "round": round_name(res),
+        "top": rows,
+    }
+
+def event_state(ev, now):
+    start = parse_utc(ev["starts_at"])
+    end = parse_utc(ev["ends_at"])
+    statuses = [c.get("status") for c in ev.get("d_cats") or []]
+    if now < start:
+        state = "next"
+    elif now >= end or (statuses and all(s == "finished" for s in statuses)):
+        state = "done"
+    else:
+        state = "live"
+    return start, end, state
+
+def build():
+    now = int(time.time())
+    root = get("/api/v1/")
+    league_url = None
+    for league in root["current"]["leagues"]:
+        if league.get("league_id") == 1:
+            league_url = league["url"]
+            break
+    if not league_url:
+        raise RuntimeError("no world cup")
+    league = get(league_url)
+    events = []
+    jobs = []
+    for ev in league.get("events") or []:
+        start, end, state = event_state(ev, now)
+        cats = []
+        for c in ev.get("d_cats") or []:
+            kind = kind_of(c.get("name"))
+            gen = gender_of(c.get("name"))
+            cats.append({
+                "id": c.get("id"),
+                "kind": kind,
+                "label": (kind + " " + gen).strip(),
+                "status": (c.get("status") or "").replace("_", " "),
+                "url": c.get("result_url"),
+            })
+            if state != "next" and c.get("result_url") and c.get("status") not in (None, "pending", "registration_pending"):
+                jobs.append(("result", ev["event_id"], c.get("id"), c["result_url"]))
+        cats.sort(key=lambda c: (KIND_ORDER.get(c["kind"], 9), {"men": 0, "women": 1, "mixed": 2}.get((c["label"].split() or [""])[-1], 9)))
+        kinds = []
+        for c in cats:
+            if c["kind"] not in kinds:
+                kinds.append(c["kind"])
+        events.append({
+            "id": ev["event_id"],
+            "name": short_event(ev.get("event") or ""),
+            "start": start,
+            "end": end,
+            "dates": fmt_dates(ev["local_start_date"], ev["local_end_date"]),
+            "state": state,
+            "kinds": kinds,
+            "cats": [{"id": c["id"], "kind": c["kind"], "label": c["label"], "status": c["status"]} for c in cats],
+        })
+    events.sort(key=lambda e: e["start"])
+    cup = (league.get("cups") or [None])[0]
+    if cup:
+        for c in cup.get("d_cats") or []:
+            if c.get("name") in CUP_NAMES and c.get("ranking_url"):
+                jobs.append(("rank", c["name"], None, c["ranking_url"]))
+
+    found = {}
+    def work(job):
+        kind, a, b, url = job
+        return (kind, a, b), get(url)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futs = [pool.submit(work, job) for job in jobs]
+        for fut in as_completed(futs):
+            key, payload = fut.result()
+            found[key] = payload
+
+    results = []
+    for ev in events:
+        blocks = []
+        for c in ev["cats"]:
+            payload = found.get(("result", ev["id"], c["id"]))
+            if not payload:
+                continue
+            block = trim_result(payload)
+            block["id"] = c["id"]
+            if block["top"]:
+                blocks.append(block)
+        if blocks:
+            results.append({"id": ev["id"], "cats": blocks})
+
+    ranks = []
+    order = {name: i for i, name in enumerate(CUP_NAMES)}
+    if cup:
+        for c in sorted(cup.get("d_cats") or [], key=lambda c: order.get(c.get("name"), 99)):
+            if c.get("name") not in CUP_NAMES:
+                continue
+            payload = found.get(("rank", c["name"], None))
+            if not payload:
+                continue
+            people = []
+            for a in (payload.get("ranking") or [])[:12]:
+                row = athlete_row(a, "rank")
+                breakdown = []
+                for s in a.get("events") or []:
+                    if s.get("included") is False:
+                        continue
+                    breakdown.append({
+                        "event": short_event(s.get("event_name") or ""),
+                        "place": s.get("rank"),
+                        "points": whole(s.get("points")),
+                    })
+                breakdown.sort(key=lambda s: -float(s["points"] or 0) if str(s["points"]).replace(".", "", 1).isdigit() else 0)
+                row["events"] = breakdown[:6]
+                first = (a.get("firstname") or "").strip()
+                last = (a.get("lastname") or "").strip()
+                if row["id"]:
+                    row["url"] = "https://www.worldclimbing.com/athlete/%s/%s" % (row["id"], slug(first, last))
+                else:
+                    row["url"] = ""
+                people.append(row)
+            if people:
+                kind = kind_of(c["name"])
+                gen = gender_of(c["name"])
+                ranks.append({
+                    "key": (kind + " " + gen).strip(),
+                    "kind": kind,
+                    "label": (kind + " " + gen).strip(),
+                    "top": people,
+                })
+    # men before women within boulder, lead, speed — CUP_NAMES is already grouped by gender across kinds.
+    # Re-sort boulder m, boulder w, lead m, lead w, speed m, speed w.
+    want = ["boulder men", "boulder women", "lead men", "lead women", "speed men", "speed women"]
+    ranks.sort(key=lambda r: want.index(r["key"]) if r["key"] in want else 99)
+
+    countries = set()
+    for block in results:
+        for c in block["cats"]:
+            for a in c["top"]:
+                if a["country"]:
+                    countries.add(a["country"])
+    for r in ranks:
+        for a in r["top"]:
+            if a["country"]:
+                countries.add(a["country"])
+    FLAGS.mkdir(parents=True, exist_ok=True)
+    missing = [code for code in sorted(countries) if not (FLAGS / (code + ".png")).is_file() or (FLAGS / (code + ".png")).stat().st_size < 40]
+    def fetch_flag(code):
+        url = "https://d1n1qj9geboqnb.cloudfront.net/flags/%s.png" % code
+        req = urllib.request.Request(url, headers={"User-Agent": UA["User-Agent"]})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as res:
+                data = res.read()
+        except Exception:
+            return
+        if len(data) > 40:
+            dest = FLAGS / (code + ".png")
+            tmp = FLAGS / (code + ".png.part")
+            tmp.write_bytes(data)
+            tmp.replace(dest)
+    if missing:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(fetch_flag, missing))
+    have = set()
+    for code in countries:
+        path = FLAGS / (code + ".png")
+        if path.is_file() and path.stat().st_size > 40:
+            have.add(code)
+    for block in results:
+        for c in block["cats"]:
+            for a in c["top"]:
+                a["flag"] = a["country"] in have
+    for r in ranks:
+        for a in r["top"]:
+            a["flag"] = a["country"] in have
+
+    live = any(e["state"] == "live" for e in events)
+    return {
+        "version": VERSION,
+        "season": root["current"].get("season") or "",
+        "updated": now,
+        "stale": False,
+        "live": live,
+        "events": events,
+        "results": results,
+        "ranks": ranks,
+    }
+
+def main():
+    now = time.time()
+    if CACHE.is_file():
+        try:
+            cached = json.loads(CACHE.read_text())
+        except Exception:
+            cached = None
+        if cached and cached.get("version") == VERSION:
+            age = now - CACHE.stat().st_mtime
+            limit = 60 if cached.get("live") else 600
+            if age < limit:
+                print(json.dumps(cached, ensure_ascii=False))
+                return
+    try:
+        data = build()
+    except Exception:
+        if CACHE.is_file():
+            try:
+                cached = json.loads(CACHE.read_text())
+                cached["stale"] = True
+                print(json.dumps(cached, ensure_ascii=False))
+                return
+            except Exception:
+                pass
+        print(json.dumps({"error": "results offline"}))
+        return
+    CACHE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CACHE.with_suffix(".json.part")
+    tmp.write_text(json.dumps(data, ensure_ascii=False))
+    tmp.replace(CACHE)
+    print(json.dumps(data, ensure_ascii=False))
+
+if __name__ == "__main__":
+    main()
+PY
+""") every 2m json timeout 40s status
+
+  source now = clock every 30s
+
+  state view = "now"
+  state eventId = 0
+  state catId = 0
+  state rankKey = "boulder men"
+  state openId = 0
+
+  let data = board != null && board.ok && board.out.error == null ? board.out : null
+  let events = data.events ?? []
+  let blocks = data.results ?? []
+  let ranks = data.ranks ?? []
+  let liveEv = events.find(e => e.state == "live")
+  let upcoming = events.find(e => e.state == "next")
+  let past = events.filter(e => e.state == "done")
+  let latest = len(past) > 0 ? last(past) : null
+  let hero = liveEv ?? upcoming ?? latest
+  let latestBlock = latest == null ? null : blocks.find(b => b.id == latest.id)
+  let later = hero == null ? null : first(events.filter(e => e.state == "next" && e.id != hero.id))
+  let secs = hero == null || now == null ? null : hero.start - now
+  let countdown = secs == null ? "" : secs >= 172800 ? "${floor(secs / 86400)}d" : secs >= 86400 ? "1d ${floor((secs % 86400) / 3600)}h" : secs > 0 ? fmtDuration(secs) : "now"
+
+  component Chip(kind) {
+    Text {
+      text: kind
+      style: label
+      align: center
+      width: len(kind) * 8 + 14
+      maxLines: 1
+      padding: [0, 2]
+      radius: 3 * corners
+      color: kind == "boulder" ? yellow : kind == "lead" ? blue : kind == "speed" ? red : kind == "relay" ? cyan : accent
+      border: 1
+      borderColor: alpha(kind == "boulder" ? yellow : kind == "lead" ? blue : kind == "speed" ? red : kind == "relay" ? cyan : accent, 0.45)
+    }
+  }
+
+  component Athlete(a) {
+    Row {
+      gap: 8
+      align: center
+      Text {
+        text: "${a.rank}"
+        width: 22
+        align: end
+        bold: a.rank <= 3
+        color: a.rank == 1 ? yellow : a.rank == 2 ? foreground : a.rank == 3 ? orange : muted
+      }
+      Box {
+        width: 28
+        height: 16
+        align: center
+        if a.flag {
+          Image { src: "~/.cache/ifsc-flags/${a.country}.png"; width: 24; height: 16; fit: contain }
+        } else {
+          Text { text: a.country; font: mono; fontSize: 10; width: 28; align: center; maxLines: 1; color: muted }
+        }
+      }
+      Text { text: a.name; style: small; weight: 1; maxLines: 1 }
+      Text { text: a.score; style: small; width: 56; align: end; color: muted; maxLines: 1 }
+    }
+  }
+
+  Column {
+    gap: 12
+    scroll: true
+
+    if data == null {
+      Column {
+        gap: 8
+        Text { text: "world climbing series"; style: muted }
+        Text { text: board == null ? "loading…" : "results offline"; style: title; color: muted }
+        if board != null {
+          Button { text: "try again"; onTap: refresh() }
+        }
+      }
+    } else {
+      Row {
+        align: center
+        Text { text: "world climbing series"; style: small; color: muted; weight: 1; maxLines: 1 }
+        Text { text: "${data.season}"; style: small; color: muted; width: 48; align: end }
+      }
+
+      Row {
+        gap: 6
+        Text {
+          text: "now"; align: center; weight: 1; maxLines: 1; padding: [8, 8]; radius: 4 * corners
+          color: view == "now" ? foreground : muted
+          background: view == "now" ? alpha(foreground, 0.14) : null
+          border: 1; borderColor: view == "now" ? alpha(foreground, 0.8) : alpha(muted, 0.4)
+          onTap: { view = "now"; haptic() }
+        }
+        Text {
+          text: "events"; align: center; weight: 1; maxLines: 1; padding: [8, 8]; radius: 4 * corners
+          color: view == "events" || view == "event" ? foreground : muted
+          background: view == "events" || view == "event" ? alpha(foreground, 0.14) : null
+          border: 1; borderColor: view == "events" || view == "event" ? alpha(foreground, 0.8) : alpha(muted, 0.4)
+          onTap: { view = "events"; haptic() }
+        }
+        Text {
+          text: "cup"; align: center; weight: 1; maxLines: 1; padding: [8, 8]; radius: 4 * corners
+          color: view == "cup" ? foreground : muted
+          background: view == "cup" ? alpha(foreground, 0.14) : null
+          border: 1; borderColor: view == "cup" ? alpha(foreground, 0.8) : alpha(muted, 0.4)
+          onTap: { view = "cup"; haptic() }
+        }
+      }
+
+      if view == "now" {
+        if hero == null {
+          Text { text: "no events this season"; style: small; color: muted }
+        } else {
+          Column {
+            gap: 6
+            padding: 12
+            radius: 8 * corners
+            background: hero.state == "live" ? alpha(accent, 0.16) : alpha(foreground, 0.05)
+            border: 1
+            borderColor: hero.state == "live" ? alpha(accent, 0.55) : alpha(muted, 0.35)
+            onTap: { view = "event"; eventId = hero.id; catId = 0; haptic() }
+            Text {
+              text: hero.state == "live" ? "live now" : hero.state == "next" ? "next up" : "last event"
+              style: label
+              color: hero.state == "done" ? muted : accent
+            }
+            Text { text: hero.name; style: title; maxLines: 2 }
+            Text { text: hero.dates; style: small; color: muted; maxLines: 1 }
+            if hero.state == "next" && countdown != "" {
+              Text { text: countdown; fontSize: 32; bold: true; color: foreground; maxLines: 1 }
+            }
+            Flow {
+              gap: 6
+              for k in hero.kinds key k { Chip { kind: k } }
+            }
+          }
+
+          if later != null {
+            Row {
+              gap: 8
+              align: center
+              onTap: { view = "event"; eventId = later.id; catId = 0; haptic() }
+              Text { text: "then"; style: label; color: muted; width: 36 }
+              Text { text: later.name; style: small; weight: 1; maxLines: 1 }
+              Text { text: later.dates; style: small; color: muted; width: 110; align: end; maxLines: 1 }
+            }
+          }
+
+          if hero.state == "live" {
+            let liveBlock = blocks.find(b => b.id == hero.id)
+            if liveBlock == null {
+              Text { text: "waiting for the first results"; style: small; color: muted }
+            } else {
+              for c in liveBlock.cats key c.id {
+                Column {
+                  gap: 3
+                  Row {
+                    align: center
+                    Text {
+                      text: c.label
+                      style: label
+                      weight: 1
+                      maxLines: 1
+                      color: c.kind == "boulder" ? yellow : c.kind == "lead" ? blue : c.kind == "speed" ? red : c.kind == "relay" ? cyan : accent
+                    }
+                    Text { text: c.round; style: small; color: muted; width: 88; align: end; maxLines: 1 }
+                  }
+                  for a in c.top key a.key { Athlete { a: a } }
+                }
+              }
+            }
+          } else if latest != null && latestBlock != null && latest.id != hero.id {
+            Row {
+              align: center
+              onTap: { view = "event"; eventId = latest.id; catId = 0; haptic() }
+              Column {
+                gap: 0
+                weight: 1
+                Text { text: "latest"; style: label; color: muted }
+                Text { text: latest.name; style: body; maxLines: 1 }
+              }
+              Text { text: latest.dates; style: small; color: muted; width: 110; align: end; maxLines: 1 }
+            }
+            for c in latestBlock.cats key c.id {
+              Column {
+                gap: 3
+                Row {
+                  align: center
+                  Text {
+                    text: c.label
+                    style: label
+                    weight: 1
+                    maxLines: 1
+                    color: c.kind == "boulder" ? yellow : c.kind == "lead" ? blue : c.kind == "speed" ? red : c.kind == "relay" ? cyan : accent
+                  }
+                  Text { text: c.round; style: small; color: muted; width: 72; align: end; maxLines: 1 }
+                }
+                for a in c.top.take(3) key a.key { Athlete { a: a } }
+              }
+            }
+          }
+        }
+      } else if view == "events" {
+        for e in events key e.id {
+          Row {
+            gap: 8
+            align: center
+            padding: [0, 4]
+            onTap: { view = "event"; eventId = e.id; catId = 0; haptic() }
+            Box {
+              width: 3
+              height: 32
+              radius: 2
+              background: e.state == "live" ? accent : e.state == "next" ? yellow : alpha(muted, 0.35)
+            }
+            Column {
+              gap: 0
+              weight: 1
+              Text { text: e.name; style: body; maxLines: 1 }
+              Text { text: e.dates; style: small; color: muted; maxLines: 1 }
+            }
+            if e.state != "done" {
+              Text { text: e.state; style: small; width: 42; align: end; color: e.state == "live" ? accent : yellow }
+            }
+          }
+        }
+      } else if view == "event" {
+        let ev = events.find(e => e.id == eventId) ?? hero
+        if ev == null {
+          Text { text: "no event selected"; style: small; color: muted }
+        } else {
+          let res = blocks.find(b => b.id == ev.id)
+          let cats = res.cats ?? []
+          let shown = cats.find(c => c.id == catId) ?? cats[0]
+          Column {
+            gap: 8
+            Button { text: "all events"; color: muted; onTap: { view = "events"; haptic() } }
+            Text { text: ev.name; style: title; maxLines: 2 }
+            Row {
+              align: center
+              Text { text: ev.dates; style: small; color: muted; weight: 1; maxLines: 1 }
+              Text {
+                text: ev.state == "live" ? "live" : ev.state == "next" ? "upcoming" : "finished"
+                style: small
+                width: 84
+                align: end
+                color: ev.state == "done" ? muted : accent
+              }
+            }
+            if shown == null {
+              Text { text: "no results published yet"; style: small; color: muted }
+            } else {
+              Flow {
+                gap: 6
+                for c in cats key c.id {
+                  Text {
+                    text: c.label
+                    align: center
+                    maxLines: 1
+                    width: len(c.label) * 8 + 18
+                    padding: [0, 6]
+                    radius: 4 * corners
+                    color: shown.id == c.id ? foreground : muted
+                    background: shown.id == c.id ? alpha(foreground, 0.16) : null
+                    border: 1
+                    borderColor: shown.id == c.id ? alpha(foreground, 0.7) : alpha(muted, 0.4)
+                    onTap: { catId = c.id; haptic() }
+                  }
+                }
+              }
+              Row {
+                align: center
+                Text { text: len(shown.top) >= 8 ? "top 8" : "${len(shown.top)} athletes"; style: label; color: muted; weight: 1 }
+                Text { text: shown.round; style: small; color: muted; width: 88; align: end; maxLines: 1 }
+              }
+              Column {
+                gap: 4
+                for a in shown.top key a.key { Athlete { a: a } }
+              }
+            }
+            Button { text: "full results"; color: muted; onTap: url("https://ifsc.results.info/event/${ev.id}") }
+          }
+        }
+      } else {
+        if len(ranks) == 0 {
+          Text { text: "no cup standings yet"; style: small; color: muted }
+        } else {
+          let cup = ranks.find(r => r.key == rankKey) ?? ranks[0]
+          Flow {
+            gap: 6
+            for r in ranks key r.key {
+              Text {
+                text: r.label
+                align: center
+                maxLines: 1
+                width: len(r.label) * 8 + 18
+                padding: [0, 6]
+                radius: 4 * corners
+                color: cup.key == r.key ? foreground : muted
+                background: cup.key == r.key ? alpha(foreground, 0.16) : null
+                border: 1
+                borderColor: cup.key == r.key ? alpha(foreground, 0.7) : alpha(muted, 0.4)
+                onTap: { rankKey = r.key; openId = 0; haptic() }
+              }
+            }
+          }
+          Text {
+            text: cup.label
+            style: title
+            maxLines: 1
+            color: cup.kind == "boulder" ? yellow : cup.kind == "lead" ? blue : cup.kind == "speed" ? red : accent
+          }
+          for a in cup.top key a.id {
+            Column {
+              gap: 4
+              padding: [8, 4]
+              radius: 6 * corners
+              background: openId == a.id ? alpha(accent, 0.08) : null
+              onTap: { openId = openId == a.id ? 0 : a.id; haptic() }
+              Athlete { a: a }
+              if openId == a.id {
+                for s in a.events key s.event {
+                  Row {
+                    gap: 8
+                    align: center
+                    Text { text: "#${s.place}"; font: mono; width: 40; color: accent; maxLines: 1 }
+                    Text { text: s.event; style: small; weight: 1; maxLines: 1 }
+                    Text { text: "${s.points}"; font: mono; width: 48; align: end; color: muted; maxLines: 1 }
+                  }
+                }
+                if a.url != "" {
+                  Button { text: "profile"; color: muted; onTap: url(a.url) }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      Text {
+        text: data.stale ? "offline · saved ${fmtTime(data.updated, "HH:mm")}" : "updated ${fmtTime(data.updated, "HH:mm")}"
+        style: label
+        color: muted
+      }
+      Spacer { height: 8 }
+    }
+  }
+}

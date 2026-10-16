@@ -765,6 +765,7 @@ Item {
         clip: true
         text: root.p.text === undefined || root.p.text === null || root.p.text === "…" ? "" : String(root.p.text)
         onTextEdited: if (root.handlers.onChange) root.handlers.onChange(field.text)
+        Component.onCompleted: if (root.p.focus === true) forceActiveFocus()
         onAccepted: {
           if (root.handlers.onSubmit) root.handlers.onSubmit(field.text)
           if (root.p.clear === true) field.text = ""

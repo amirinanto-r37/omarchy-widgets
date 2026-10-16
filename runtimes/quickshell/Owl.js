@@ -98,9 +98,53 @@ function numText(x) {
   return m + "E" + (parts[1].charAt(0) === "+" ? parts[1].slice(1) : parts[1])
 }
 
+// Java's Float.toString, for the numbers the jar keeps as floats: always a
+// fraction (3.0), and the fewest digits (two at least) that still read back as
+// the same float, so 28.9f prints 28.9 and not the double it widens to,
+// 28.899999618530273. A tie between two such decimals goes to the even digit,
+// so it rounds the float's exact value; QML has no BigInt, hence the digit array.
 function floatText(x) {
   var f = Math.fround(x)
-  return f === Math.round(f) && Math.abs(f) < 1e7 ? String(f) + ".0" : numText(f)
+  if (f !== f || f === Infinity || f === -Infinity) return numText(f)
+  if (f === 0) return 1 / f < 0 ? "-0.0" : "0.0"
+  var m = Math.abs(f), e = 0
+  while (m !== Math.floor(m)) { m *= 2; e-- }
+  while (m > 16777216 && m % 2 === 0) { m /= 2; e++ }
+  var ds = [], i, carry
+  for (; m > 0; m = Math.floor(m / 10)) ds.push(m % 10)
+  for (var k = 0; k < Math.abs(e); k++) {
+    carry = 0
+    for (i = 0; i < ds.length; i++) {
+      var v = ds[i] * (e < 0 ? 5 : 2) + carry
+      ds[i] = v % 10
+      carry = Math.floor(v / 10)
+    }
+    if (carry) ds.push(carry)
+  }
+  var all = ds.reverse().join("")
+  var exp = all.length - 1 + Math.min(e, 0)
+  for (var p = 2; p <= 9; p++) {
+    var c = all.slice(0, p), rest = all.slice(p)
+    while (c.length < p) c += "0"
+    var r0 = rest.charAt(0)
+    var up = r0 > "5" || r0 === "5" && (/[1-9]/.test(rest.slice(1)) || +c.charAt(p - 1) % 2 === 1)
+    var cexp = exp
+    if (up) {
+      var n = c.split("")
+      for (i = p - 1; i >= 0 && n[i] === "9"; i--) n[i] = "0"
+      if (i < 0) { n.unshift("1"); n.pop(); cexp++ } else n[i] = String(+n[i] + 1)
+      c = n.join("")
+    }
+    if (Math.fround(Number((f < 0 ? "-" : "") + c.charAt(0) + "." + c.slice(1) + "e" + cexp)) === f) break
+  }
+  c = c.replace(/0+$/, "") || "0"
+  var sign = f < 0 ? "-" : ""
+  if (cexp >= -3 && cexp < 7) {
+    if (cexp < 0) return sign + "0." + "000".slice(0, -cexp - 1) + c
+    while (c.length <= cexp + 1) c += "0"
+    return sign + c.slice(0, cexp + 1) + "." + c.slice(cexp + 1)
+  }
+  return sign + c.charAt(0) + "." + (c.slice(1) || "0") + "E" + cexp
 }
 
 function hex8(n) {
@@ -919,7 +963,7 @@ var CONSTANTS = { pi: Math.PI, transparent: new Col(null, 0, 1) }
 var ACTIONS = {
   terminal: [1, 2], app: [1, 1], run: [1, 1], url: [1, 1], launcher: [1, 1], refresh: [0, 1],
   media: [1, 1], androidApp: [1, 1], copy: [1, 1], notify: [1, 2], volume: [1, 1],
-  notification: [2, 2], screen: [0, 0], close: [0, 0]
+  notification: [2, 2], screen: [0, 0], close: [0, 0], torch: [1, 1], share: [1, 1], haptic: [0, 0]
 }
 
 function Args(args, host) {
@@ -1298,6 +1342,11 @@ var BUILTINS = {
     if (f === "") return splitStr(s, "").join(r)
     return s.split(f).join(r)
   }),
+  // owl 6: a value as one shell word, for commands put together while the widget runs.
+  sh: B(1, 1, function(a) {
+    var v = a.get(0)
+    return "'" + (v === null ? "" : text(v)).split("'").join("'\\''") + "'"
+  }),
   startsWith: B(2, 2, function(a) { return a.str(0).indexOf(a.str(1)) === 0 }),
   endsWith: B(2, 2, function(a) {
     var s = a.str(0), e = a.str(1)
@@ -1546,7 +1595,9 @@ var OPERATORS = {
   "+": function(a, b) {
     if (typeof a === "number" && typeof b === "number") return a + b
     if (Array.isArray(a) && Array.isArray(b)) return lst(a.concat(b))
-    if (typeof a === "string" || typeof b === "string") return text(a) + text(b)
+    // Strings join as written ("- " + x keeps its space); only other values are formatted.
+    if (typeof a === "string" || typeof b === "string")
+      return (typeof a === "string" ? a : text(a)) + (typeof b === "string" ? b : text(b))
     var x = num(a), y = num(b)
     return x !== null && y !== null ? x + y : null
   },
@@ -1564,7 +1615,7 @@ var OPERATORS = {
 
 // ---------------------------------------------------------------- compiler
 
-var LEVEL = 5
+var LEVEL = 7
 var MAX_NODES = 500
 var MAX_SCREEN_NODES = 1000
 var MAX_ASSET_BYTES = 2097152
@@ -1586,7 +1637,7 @@ var KINDS = {
   Spacer: [[], "none"],
   Terminal: [["command", "fontSize"], "none"],
   Slider: [["value", "min", "max", "step", "color", "track", "live"], "none"],
-  Input: [["text", "placeholder", "color", "fontSize", "clear"], "none"]
+  Input: [["text", "placeholder", "color", "fontSize", "clear", "focus"], "none"]
 }
 var KIND_NAMES = Object.keys(KINDS)
 var COMMON = ["width", "height", "size", "fill", "weight", "padding", "background", "border", "borderColor",
@@ -1617,16 +1668,23 @@ var SINCE = { Terminal: 2, sprite: 3 }
   .forEach(function(k) { SINCE[k] = 4 })
 ;["screen", "close", "screenWidth", "screenHeight", "optional", "linux", "android.system"]
   .forEach(function(k) { SINCE[k] = 5 })
+// owl 6: values in commands, quoted, and the launcher's corner style.
+SINCE.sh = 6
+SINCE.corners = 6
+SINCE["Input.focus"] = 6
+// owl 7: more of the phone: the next alarm, its modes, the torch, the share sheet, haptics.
+;["android.alarm", "android.modes", "torch", "share", "haptic"].forEach(function(k) { SINCE[k] = 7 })
 
 var MANAGERS = { pacman: /^[a-z0-9@_+][a-z0-9@._+-]*$/ }
 var HANDLER_PARAMS = { onTap: ["x", "y"], onDrag: ["dx", "dy", "x", "y"], onChange: ["value"], onSubmit: ["value"] }
 var HANDLER_KINDS = { onChange: ["Slider", "Input"], onSubmit: ["Input"] }
 var TRIGGER_PARAMS = { on: ["value", "old"] }
-var ANDROID = ["battery", "device", "media", "notifications", "volume", "system"]
+var ANDROID = ["battery", "device", "media", "notifications", "volume", "system", "alarm", "modes"]
 var MEDIA = ["toggle", "play", "pause", "next", "previous", "open"]
 var VOLUME = ["up", "down", "mute", "unmute", "toggle"]
+var TORCH = ["on", "off", "toggle"]
 var NOTIFICATION = ["open", "dismiss"]
-var TILE = ["cols", "rows", "tileWidth", "tileHeight", "screenWidth", "screenHeight"]
+var TILE = ["cols", "rows", "tileWidth", "tileHeight", "screenWidth", "screenHeight", "corners"]
 var WIDGET_PROPS = ["size", "minSize", "page", "order", "padding", "background"]
 
 // An evaluator: `c` is set when the value is known at compile time.
@@ -1711,6 +1769,8 @@ function Compiler(ast) {
   this.maxNodes = MAX_NODES
   this.screenAction = null
   this.needs = null
+  // Whether nodes being compiled are the screen's (true) or the tile's (false); null in components.
+  this.inScreen = null
 }
 
 function messageOf(e) {
@@ -1781,6 +1841,7 @@ Compiler.prototype = {
     var requires = this.requires(reqFields)
     var screens = body.items.filter(function(it) { return it.kind === "node" && it.type === "screen" })
     if (screens.length > 1) this.fail("a widget has one screen { }", screens[1].pos)
+    this.inScreen = false
     var rootNodes = this.items(body.items.filter(function(it) { return screens.indexOf(it) < 0 }), this.root, "ui")
     if (!rootNodes.length) this.fail("a widget needs at least one node, like Text { text: \"hi\" }", 0)
     var tileNodes = this.nodes
@@ -1831,6 +1892,7 @@ Compiler.prototype = {
     if (body.animations.length) this.fail("animate belongs inside a node", body.animations[0].pos)
     this.nodes = 0
     this.maxNodes = MAX_SCREEN_NODES
+    this.inScreen = true
     var tree = this.items(body.items, this.root, "ui")
     if (!tree.length) this.fail("a screen needs at least one node", n.pos)
     return [tree, body.props.length ? this.ex(body.props[0].value, this.root) : null]
@@ -2115,6 +2177,9 @@ Compiler.prototype = {
       if (kind[0].indexOf(p.name) < 0 && COMMON.indexOf(p.name) < 0)
         self.fail(n.type + " has no property '" + p.name + "' (" + kind[0].concat(COMMON).join(", ") + ")", p.pos)
       if (props.hasOwnProperty(p.name)) self.fail("'" + p.name + "' is set twice", p.pos)
+      // On a tile it would raise the keyboard whenever its page shows.
+      if (p.name === "focus" && self.inScreen === false) self.fail("focus only works in a screen { }", p.pos)
+      self.since(n.type + "." + p.name, p.pos)
       props[p.name] = self.prop(p, scope)
     })
     var handlers = {}
@@ -2209,6 +2274,8 @@ Compiler.prototype = {
       if (c.name === "media" && first !== null && MEDIA.indexOf(first) < 0) self.fail("media takes " + MEDIA.join(", "), c.pos)
       if (c.name === "volume" && first !== null && VOLUME.indexOf(first) < 0 && num(first) === null)
         self.fail("volume takes a level in percent, or " + VOLUME.join(", "), c.pos)
+      if (c.name === "torch" && first !== null && TORCH.indexOf(first) < 0)
+        self.fail("torch takes true, false, " + TORCH.join(", "), c.pos)
       if (c.name === "notification" && first !== null && NOTIFICATION.indexOf(first) < 0)
         self.fail("notification takes " + NOTIFICATION.join(", ") + " and a notification's key", c.pos)
       self.since(c.name, c.pos)
@@ -2370,6 +2437,7 @@ Compiler.prototype = {
       this.fail(e.name + "(...) is a source: source x = " + e.name + "(\"...\")", e.pos)
     var b = BUILTINS.hasOwnProperty(e.name) ? BUILTINS[e.name] : null
     if (!b) this.fail("unknown function '" + e.name + "'", e.pos)
+    this.since(e.name, e.pos)
     if (e.named.length) this.fail(e.name + " takes no named arguments", e.named[0][1].pos)
     if (e.args.length < b.min || e.args.length > b.max)
       this.fail(e.name + " takes " + (b.min === b.max ? String(b.min) : b.min + "-" + b.max) + " arguments, not " + e.args.length, e.pos)

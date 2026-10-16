@@ -1,7 +1,7 @@
 widget "coin flip" {
   meta {
     description: "A coin to toss: tap it and watch it tumble to heads or tails"
-    version: "1.0"; license: "MIT"; category: "fun"
+    version: "1.0"; license: "MIT"; category: "games"
   }
   size: 3x3
   minSize: 2x2

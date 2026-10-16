@@ -1,0 +1,123 @@
+widget "offgrid solar" {
+  meta { owl: 5; description: "Monitor Victron VRM solar power, battery charge and daily yield. Tap to connect your installation."; version: "1.1.0"; license: "MIT"; category: "home" }
+  size: 3x4
+  minSize: 3x4
+  state site = "" persist
+  state token = "" persist
+  state editing = false
+  state draftSite = ""
+  state draftToken = ""
+  state setupError = ""
+  let validDraft = match(draftSite, "^[0-9]+$") != null && len(draftToken) > 0
+  let configured = match(site, "^[0-9]+$") != null && len(token) > 0
+  source vrm = http(configured ? "https://vrmapi.victronenergy.com/v2/installations/${site}/diagnostics" : null, {"x-authorization": "Token ${token}"}) every 1m json timeout 25s status
+  source now = clock every 1m
+  let records = configured && vrm.ok && vrm.out.success == true ? (vrm.out.records ?? []) : []
+  let pv = filter(records, r => r.code == "PVP")
+  let yields = filter(records, r => r.code == "YT")
+  let previous = filter(records, r => r.code == "YY")
+  let peaks = filter(records, r => r.code == "MCPT")
+  let outputs = filter(records, r => r.code == "OP1" || r.code == "OP2" || r.code == "OP3")
+  let d = {
+    solar: find(records, r => r.code == "Pdc").rawValue ?? (len(pv) > 0 ? sum(map(pv, r => r.rawValue)) : null),
+    soc: find(records, r => r.code == "bs").rawValue,
+    battery: find(records, r => r.code == "bp").rawValue,
+    voltage: find(records, r => r.code == "bv").rawValue,
+    current: find(records, r => r.code == "bc").rawValue,
+    dc: find(records, r => r.code == "dc").rawValue,
+    ac: len(outputs) > 0 ? sum(map(outputs, r => r.rawValue)) : null,
+    yield: len(yields) > 0 ? sum(map(yields, r => r.rawValue)) : null,
+    yesterday: len(previous) > 0 ? sum(map(previous, r => r.rawValue)) : null,
+    peak: len(peaks) > 0 ? sum(map(peaks, r => r.rawValue)) : null,
+    time: find(records, r => r.code == "bs").timestamp
+  }
+  let stale = d.time != null && now - d.time > 1800
+  let batteryColor = d.soc < 20 ? red : green
+  let connected = vrm.ok && vrm.out.success == true
+  let connectionText = vrm == null ? "Connecting…" : connected ? "Connected to VRM" : vrm.code == 401 || vrm.code == 403 ? "Access denied. Check your token and installation access." : "Unable to load VRM data. Check your connection and installation ID."
+  onTap: screen()
+
+  if !configured {
+    Column {
+      gap: 12
+      Text { text: "OFFGRID"; style: label; color: accent }
+      Text { text: "Victron solar"; fontSize: 18; color: yellow }
+      Text { text: "Tap set up to connect your VRM installation."; style: small }
+      Spacer { weight: 1 }
+      Button { text: "set up"; onTap: screen() }
+    }
+  } else {
+  Column {
+    gap: 3
+    Row {
+      Text { text: "OFFGRID"; fontSize: 10; weight: 1; color: accent }
+      Text { text: vrm == null ? "…" : !connected ? "offline" : stale ? "old data" : "VRM"; fontSize: 10; width: 48; align: end; color: stale || (vrm != null && !vrm.ok) ? yellow : muted }
+    }
+    Text { text: "${round(d.solar)} W"; fontSize: 30; color: yellow }
+    Text { text: "solar power"; fontSize: 10; color: muted }
+    Row {
+      Text { text: "battery"; fontSize: 10; weight: 1 }
+      Text { text: "${round(d.soc)}%"; fontSize: 18; color: batteryColor; width: 78; align: end }
+    }
+    Progress { value: d.soc; color: batteryColor }
+    Text { text: d.battery == null ? "…" : d.battery < 0 ? "Using ${round(abs(d.battery))} W" : "Charging ${round(d.battery)} W"; fontSize: 10 }
+    Spacer { weight: 1 }
+    Text { text: "AC ${round(d.ac)} W · DC ${round(d.dc)} W"; fontSize: 10 }
+    Text { text: "Yield ${fixed(d.yield, 2)} kWh"; color: yellow; fontSize: 10 }
+    Text { text: d.time == null ? "Connecting…" : "Data ${fmtTime(d.time, 'dd MMM HH:mm')}"; fontSize: 10; color: muted }
+  }
+  }
+  screen {
+    title: "Offgrid · Victron VRM"
+    if !configured || editing {
+      Column {
+        scroll: true
+        gap: 14
+        Text { text: "Connect to Victron VRM"; style: title }
+        Text { text: "Enter the numeric installation ID from your VRM dashboard URL."; style: small }
+        Input { text: draftSite; placeholder: "Installation ID"; onChange: draftSite = trim(value) }
+        Text { text: "Create an access token in VRM under Preferences → Integrations → Add."; style: small }
+        Input { text: draftToken; placeholder: "API access token"; onChange: draftToken = trim(value) }
+        Text { text: "Saved locally on this device. Your token is visible while entering it. Share the widget file, which contains no saved settings."; style: small; color: muted }
+        Text { text: setupError; style: small; color: yellow }
+        Button { text: "connect"; onTap: {
+          setupError = validDraft ? "" : "Enter a numeric installation ID and an access token."
+          site = validDraft ? draftSite : site
+          token = validDraft ? draftToken : token
+          editing = !validDraft
+          draftToken = validDraft ? "" : draftToken
+          refresh()
+        } }
+        Button { text: "get a VRM token"; onTap: url("https://vrm.victronenergy.com/access-tokens") }
+        if configured {
+          Button { text: "cancel"; onTap: { editing = false; draftToken = ""; setupError = "" } }
+          Button { text: "clear saved connection"; onTap: { site = ""; token = ""; draftSite = ""; draftToken = ""; editing = false; setupError = "" } }
+        }
+      }
+    } else {
+    Column {
+      scroll: true
+      gap: 16
+      Text { text: !connected ? connectionText : stale ? "Older readings — check the GX connection." : "Latest reported readings"; color: stale ? yellow : muted }
+      Text { text: "${round(d.solar)} W solar"; style: huge; color: yellow }
+      Text { text: "Battery ${round(d.soc)}%"; style: title; color: batteryColor }
+      Progress { value: d.soc; color: batteryColor }
+      Text { text: "${fixed(d.voltage, 2)} V · ${fixed(d.current, 2)} A" }
+      Text { text: "Battery power ${round(d.battery)} W" }
+      Text { text: "Positive = charging · negative = discharging"; style: small; color: muted }
+      Text { text: "AC output ${round(d.ac)} W · DC system ${round(d.dc)} W" }
+      Text { text: "Reported day yield: ${fixed(d.yield, 2)} kWh"; color: yellow }
+      Text { text: "Previous day: ${fixed(d.yesterday, 2)} kWh" }
+      Text { text: "Charger peaks: ${round(d.peak)} W" }
+      Text { text: "Measured ${fmtTime(d.time, 'dd MMM yyyy HH:mm')}"; style: small; color: muted }
+      Text { text: "Checks VRM every minute. Values follow your GX upload interval."; style: small; color: muted }
+      Button { text: "refresh"; onTap: refresh() }
+      Button { text: "open VRM"; onTap: url("https://vrm.victronenergy.com/installation/${site}") }
+      Button { text: "connection settings"; onTap: { draftSite = site; draftToken = ""; editing = true } }
+    }
+    }
+  }
+}
+
+// Connection settings stay in local launcher state, outside this file.
+// No shell dependencies: data is fetched by Android.

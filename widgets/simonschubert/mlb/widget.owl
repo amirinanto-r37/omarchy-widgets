@@ -4,7 +4,7 @@ widget "mlb" {
     description: "MLB scores from ESPN with team logos: live games first, then last night's finals and today's first pitches. Tap for every game and both league standings"
     version: "1.0"
     license: "MIT"
-    category: "world"
+    category: "sport"
   }
   requires { pacman: ["curl", "jq"] }
   page: 1

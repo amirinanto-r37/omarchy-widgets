@@ -1,5 +1,5 @@
 widget "free games" {
-  meta { description: "Games free to keep on the Epic Games Store right now and the ones coming next"; version: "1.1"; license: "MIT"; category: "fun" }
+  meta { description: "Games free to keep on the Epic Games Store right now and the ones coming next"; version: "1.1"; license: "MIT"; category: "games" }
   size: 6x3
   minSize: 3x2
 

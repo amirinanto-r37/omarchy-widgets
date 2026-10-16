@@ -1,5 +1,5 @@
 widget "todo" {
-  meta { description: "Open items from the Markdown checklist ~/notes/todo.md; tap one to check it off"; version: "1.1"; license: "MIT"; category: "productivity" }
+  meta { description: "Open items from the Markdown checklist ~/notes/todo.md; tap one to check it off"; version: "1.2"; license: "MIT"; category: "productivity" }
   size: 3x4
   minSize: 3x2
 
@@ -27,7 +27,7 @@ widget "todo" {
       for it in items key it.line {
         Row {
           gap: 8
-          onTap: run("sed -i '${it.line}s/\\[ \\]/[x]/' ~/notes/todo.md")
+          onTap: run("sed -i '${int(it.line)}s/\\[ \\]/[x]/' ~/notes/todo.md")
           Box { size: 14; radius: 3; border: 1; borderColor: muted }
           Text { text: it.text; fontSize: 12; maxLines: 2; weight: 1 }
         }

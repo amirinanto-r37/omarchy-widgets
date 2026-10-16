@@ -60,8 +60,14 @@ that read it redraw. Properties are separated by newlines or `;`.
 
 Sources only run while their page (or a neighbour) is on screen, and
 identical commands in several widgets run once. Keep commands fast. A command
-can depend on state (`cmd("curl wttr.in/${city}")`) and re-runs with the new
+can depend on state (`cmd("curl wttr.in/${sh(city)}")`) and re-runs with the new
 value at its next interval.
+
+A value goes into a command as `${sh(value)}`, outside any quotes: `sh` puts it in single quotes,
+so bash reads it as one word, whatever it holds. Unquoted, a `'` or `;` in a city name, a file or
+an API's reply would run as code. Numbers from `int`, `round` or `fixed` can go in as they are. The
+store takes no other values in commands, and lists them as `‹value›` for the reviewer
+(`curl wttr.in/‹value›`). `sh` needs `meta { owl: 6 }`.
 
 ## Expressions
 
@@ -79,7 +85,7 @@ value at its next interval.
 | functions | |
 |---|---|
 | numbers | `min max clamp(x, lo, hi) lerp(a, b, t) round(x, digits) floor ceil abs sqrt pow sin cos tan atan2 rad deg sign num(x, default) int` |
-| text | `str len trim upper lower lines words split(s, sep) join(list, sep) replace(s, a, b) contains startsWith endsWith sub(s, from, to) pad(x, width, char) fixed(x, digits)` |
+| text | `str len trim upper lower lines words split(s, sep) join(list, sep) replace(s, a, b) contains startsWith endsWith sub(s, from, to) pad(x, width, char) fixed(x, digits)`, `sh(x)` (one quoted shell word) |
 | format | `fmtBytes(n)` → `1.5G`, `fmtDuration(seconds)` → `2h 5m`, `fmtTime(seconds, "EEE HH:mm")` |
 | parsing | `match(s, regex)` (groups of the first match), `matchAll(s, regex)`, `parseJson(s)` |
 | lists | `range(n)` or `range(a, b, step)`, `map filter find any all count sum avg sort sortBy reverse take drop first last indexOf unique flatten`, `keys values entries get(obj, key, default)` |
@@ -115,7 +121,7 @@ Every node also takes:
 
 - `width height size` (dp), `fill: true/width/height`, `weight` (share of the
   space left in a Row or Column), `padding` (`8`, `[h, v]` or `[l, t, r, b]`)
-- `background`, `border` (dp), `borderColor`, `radius`, `clip: true`
+- `background`, `border` (dp), `borderColor`, `radius` (dp; `8 * corners` follows the user's corner style), `clip: true`
 - `opacity`, `rotation` (degrees), `scale`, `offset: [x, y]` (dp), `visible`
 - handlers: `onTap` (with `x`, `y`) and `onDrag` (with `dx`, `dy`, `x`, `y`). Long-press
   belongs to the home screen, which uses it to move and resize tiles
@@ -184,7 +190,9 @@ Canvas {
 Styles: `fill:` (a color or gradient), `stroke:`, `width:` (stroke width),
 `cap: round/butt/square`. Without either, a shape is filled with `color:` or
 the foreground. A widget that reads `time` animates every frame while it's on
-screen.
+screen, and only while it reads it: a `time` under an `if` that's false, like a
+backdrop drawn only while music plays, costs nothing (older launchers
+animate whenever `time` appears at all).
 
 ## Shader
 
@@ -237,8 +245,9 @@ https://github.com/SimonSchubert/omarchy-widgets. To publish one, long-press it,
 and the default agent opens a pull request there with the GitHub CLI. The store needs:
 
 - `meta` with a `description` (10-200 characters), a `version` and a `license`, and ideally a `category`:
-  `news`, `dev`, `productivity`, `time`, `world`, `fun`, `home` or `system`
+  `news`, `dev`, `productivity`, `time`, `world`, `sport`, `finance`, `media`, `games`, `pets`, `fun`, `home` or `system`
 - every package in `requires`
+- values in commands as `${sh(value)}` (or numbers), so what a command runs is all in the file
 - nothing personal: no tokens, personal paths or hard-coded location
 - a higher `version` for each update
 
@@ -269,5 +278,13 @@ and the message goes to `.errors/`.
 - Use `weight: 1` to fill leftover space and `fill: width` to stretch across.
 - A `Text` without `width`, `weight` or `fill` takes the full width. In a `Row`, give the Texts
   next to a `weight: 1` one a `width`, or the weighted one is squeezed to nothing.
+- `cols`, `rows` (grid cells) and `tileWidth`, `tileHeight` (dp) are the tile's size, to pick a
+  layout that fits. In landscape a tile can be taller than wide.
+- `corners` is the user's corner style as a multiplier, not a radius: 0 (edge, square),
+  0.5 (soft) or 1 (round). Multiply the radius a shape would have on round by it:
+  `radius: 8 * corners` for cards and album art, `3 * corners` for small chips, and the same in
+  Canvas (`rect(x, y, w, h, radius: 8 * corners)`). The tile and bordered Boxes follow it on
+  their own; a fixed `radius`, a clipped Box, an Image or a Canvas shape doesn't. Needs
+  `meta { owl: 6 }`. On the desktop it's always 0, since Omarchy is square.
 - Look at the example widgets in this folder for patterns: `90-analog-clock` (Canvas),
   `91-focus` (state and buttons), `92-aurora` (Shader), `93-latency` (stream).

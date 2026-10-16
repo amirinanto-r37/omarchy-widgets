@@ -1,10 +1,13 @@
 name: review
 
-# Checks every widget a pull request adds or changes and writes a summary for
+# Checks every widget and app a pull request adds or changes and writes a summary for
 # the reviewer: what it runs, what it installs, and anything that looks risky.
+#
+# pull_request_target, so a pull request can't bring its own copy of this check:
+# nothing from it is checked out or run, and the token stays read-only.
 on:
-  pull_request:
-    paths: ["widgets/**"]
+  pull_request_target:
+    paths: ["widgets/**", "apps/**"]
 
 permissions:
   contents: read
@@ -22,59 +25,24 @@ jobs:
       - name: Tools
         run: pacman -Syu --noconfirm --needed git jre-openjdk-headless >/dev/null
 
+      # The base branch as it is now: this workflow and tools/owl*.jar are the reviewed
+      # ones, not the pull request's, and the newest, even for a branch made before
+      # them. The pull request's files are only read as data, by verify-pr.sh.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Changed files
-        run: |
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git diff --name-only "${{ github.event.pull_request.base.sha }}"...HEAD -- widgets > changed.txt
-          cat changed.txt
-
-      - name: Only widget files, only in your own folder
+      - name: Review
         env:
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
           LOGIN: ${{ github.event.pull_request.user.login }}
           ROLE: ${{ github.event.pull_request.author_association }}
         run: |
-          login=$(echo "$LOGIN" | tr 'A-Z' 'a-z')
-          bad=0
-          while read -r f; do
-            case "$f" in
-              widgets/*/*/widget.owl|widgets/*/*/preview.png|widgets/*/*/README.md|widgets/*/*/previews/*.webp) ;;
-              *) echo "::error file=$f::a widget folder holds only widget.owl, preview.png, README.md and previews/<theme>.webp"; bad=1 ;;
-            esac
-            author=$(echo "$f" | cut -d/ -f2)
-            if [ "$author" != "$login" ] && [ "$ROLE" != OWNER ] && [ "$ROLE" != MEMBER ]; then
-              echo "::error file=$f::widgets/$author/ belongs to @$author; put yours under widgets/$login/"
-              bad=1
-            fi
-            if [ -f "$f" ] && [ "${f##*.}" = png ] && [ "$(stat -c %s "$f")" -gt 307200 ]; then
-              echo "::error file=$f::preview.png is over 300 KB"
-              bad=1
-            fi
-            if [ -f "$f" ] && [ "${f##*.}" = webp ] && [ "$(stat -c %s "$f")" -gt 102400 ]; then
-              echo "::error file=$f::a themed preview is over 100 KB"
-              bad=1
-            fi
-          done < changed.txt
-          exit $bad
-
-      - name: Review
-        run: |
-          base="${{ github.event.pull_request.base.sha }}"
-          mkdir -p base
-          files=""
-          while read -r f; do
-            [ "${f##*/}" = widget.owl ] || continue
-            files="$files $f"
-            if git cat-file -e "$base:$f" 2>/dev/null; then
-              mkdir -p "base/$(dirname "$f")"
-              git show "$base:$f" > "base/$f"
-            fi
-          done < changed.txt
-          [ -z "$files" ] && exit 0
-          java -jar tools/owl.jar review . $files --base base | tee -a "$GITHUB_STEP_SUMMARY"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          tools/verify-pr.sh "$PR" pr | tee -a "$GITHUB_STEP_SUMMARY"
           exit "${PIPESTATUS[0]}"
 
       - name: Packages
@@ -82,8 +50,10 @@ jobs:
           pacman -Fy --noconfirm >/dev/null
           bad=0
           while read -r f; do
-            [ "${f##*/}" = widget.owl ] && [ -f "$f" ] || continue
-            java -jar tools/owl.jar programs "$f" > deps.txt
+            # Apps need owl 8, which only owl-apps.jar reads.
+            case $f in apps/*) jar=tools/owl-apps.jar ;; *) jar=tools/owl.jar ;; esac
+            f=pr/$f
+            java -jar "$jar" programs "$f" > deps.txt
             declared=$(awk '$1 == "pacman" { print $2 }' deps.txt)
             echo "#### Packages for \`$f\`" >> "$GITHUB_STEP_SUMMARY"
             for p in $declared; do
@@ -97,12 +67,12 @@ jobs:
             done
             # Programs whose package is neither declared nor part of a base system.
             for prog in $(awk '$1 == "program" { print $2 }' deps.txt); do
-              owner=$(pacman -Fq "usr/bin/$prog" 2>/dev/null | head -1 | cut -d/ -f2)
+              owner=$(pacman -Fq "usr/bin/$prog" 2>/dev/null | head -1 | cut -d/ -f2 || true)
               if [ -z "$owner" ]; then
                 echo "- ⚠️ \`$prog\`: no Arch package provides it" >> "$GITHUB_STEP_SUMMARY"
               elif ! echo "$declared" | grep -qx "$owner" && ! pacman -Qq "$owner" >/dev/null 2>&1; then
                 echo "- ⚠️ \`$prog\` comes from **$owner**, which isn't in requires" >> "$GITHUB_STEP_SUMMARY"
               fi
             done
-          done < changed.txt
+          done < pr/owls.txt
           exit $bad

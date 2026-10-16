@@ -1,5 +1,5 @@
 widget "red panda" {
-  meta { owl: 3; description: "A pixel red panda living in a tree. Pet it, tickle it, scritch it, feed it bamboo, shake its leaves; it naps on its branch and holds a leaf over its head when it rains (weather from wttr.in)"; version: "1.0"; license: "MIT"; category: "fun" }
+  meta { owl: 3; description: "A pixel red panda living in a tree. Pet it, tickle it, scritch it, feed it bamboo, shake its leaves; it naps draped over its branch and holds a leaf over its head when it rains (weather from wttr.in)"; version: "1.1"; license: "MIT"; category: "pets" }
   size: 3x3
   minSize: 2x2
   padding: 0
@@ -12,6 +12,11 @@ widget "red panda" {
   // behind the ears, a tap on the bamboo a meal, a tap in the leaves a shake,
   // and a tap anywhere else makes it look there. When it rains where you are
   // (wttr.in says) it shelters under a leaf; a tap on the trunk makes it rain anyway, or never.
+  //
+  // Cheap when idle: the breath, blink, tail, stars and z's step on the 1 s clock
+  // (`now`), so the tile redraws once a second. The frame clock (`time`) is only
+  // read for a few seconds after a tap or drag, and while it rains, so the
+  // launcher only animates every frame then.
   source now = clock every 1s
   // Real rain, where the phone is (located by IP). `status`: offline just means no rain.
   source wx = http("https://wttr.in/?format=j1") every 30m timeout 10s json status
@@ -34,7 +39,7 @@ widget "red panda" {
   state dragX = 0
 
   let hour = num(fmtTime(now, "H"))
-  let night = hour >= 22 || hour < 7
+  let night = hour != null && (hour >= 22 || hour < 7)   // not night while the clock is still loading
   let idle = now - lastTap > 5 * 60
   let asleep = (night || idle) && now >= wakeUntil
   let hungry = fed > 0 && now - fed > 6 * 3600
@@ -161,11 +166,12 @@ widget "red panda" {
       lastTap = asleep ? lastTap : now
     }
 
-    // Seconds since the last tap. `time` restarts with the frame clock (say,
-    // after the page was off screen), so an old tap could look recent again:
-    // the wall clock has the final say.
-    let since = time >= tapAt && now - tapNow < 6 ? time - tapAt : 1000
-    let scritch = !asleep && time >= dragAt && time - dragAt < 0.7 && now - dragNow < 3 ? 1 - max(time - dragAt - 0.3, 0) / 0.4 : 0
+    // Seconds since the last tap. The wall clock is checked first, so `time` is
+    // only read while a tap is fresh; and since `time` restarts with the frame
+    // clock (say, after the page was off screen), an old tap could look recent
+    // again, so the wall clock has the final say.
+    let since = now - tapNow < 6 && time >= tapAt ? time - tapAt : 1000
+    let scritch = !asleep && now - dragNow < 3 && time >= dragAt && time - dragAt < 0.7 ? 1 - max(time - dragAt - 0.3, 0) / 0.4 : 0
 
     // Night sky: a crescent moon and a few twinkling stars.
     if night {
@@ -179,7 +185,7 @@ widget "red panda" {
       for k in range(5) {
         let sx = floor(W * (0.2 + 0.15 * k) / p) * p
         let sy = (7 + (k * 7) % 5) * p
-        rect(sx, sy, p, p, fill: alpha(foreground, 0.3 + 0.5 * abs(sin(time * 0.8 + k * 1.9))))
+        rect(sx, sy, p, p, fill: alpha(foreground, 0.3 + 0.5 * abs(sin(now * 0.8 + k * 1.9))))
       }
     }
 
@@ -205,7 +211,7 @@ widget "red panda" {
     }
 
     // Bamboo growing in the bottom-right corner, swaying a little.
-    let sway = round(sin(time * 0.9) * 1) * p
+    let sway = round(sin(now * 0.9)) * p
     sprite(bambooArt, bambooX + 2 * p, H - textH - 8 * p, p, palette: pal)
     rect(bambooX + sway, H - textH - 9 * p, 3 * p, p, radius: p, fill: leafLight)
     rect(bambooX + 4 * p - sway, H - textH - 7 * p, 3 * p, p, radius: p, fill: leaf)
@@ -239,8 +245,8 @@ widget "red panda" {
 
     if asleep {
       // Draped over the branch. The body breathes; the legs swing gently.
-      let breath = (floor(time / 1.6) % 2) * p
-      let swing = (floor(time / 2.1) % 2) * p
+      let breath = (floor(now / 2) % 2) * p
+      let swing = (floor(now / 3) % 2) * p
       let dx = floor((W / 2 - 8 * p) / p) * p
       let peek = tapKind == "peek" && since < 2.5
       sprite(dozeArt, dx, branchY - 7 * p + breath, p, palette: bodyPal)
@@ -256,7 +262,7 @@ widget "red panda" {
       }
       if !peek {
         for k in range(3) {
-          let t = (time * 0.4 + k / 3) % 1
+          let t = ((now + k * 2) % 6) / 6
           text("z", dx + 6 * p + t * 4 * p, branchY - 9 * p - t * 8 * p, size: (2 + t * 2) * p, bold: true, color: alpha(foreground, 1 - t))
         }
       }
@@ -271,14 +277,14 @@ widget "red panda" {
       let happy = petting || scritch > 0 || chomping
       // A hop when petted; otherwise a one-pixel breath. Feet stay on the branch.
       let hop = petting ? round(abs(sin(since * 7)) * 2 * max(1.4 - since, 0)) * p : 0
-      let breath = (floor(time / 0.8) % 2) * p
+      let breath = (now % 2) * p
       // Tickled, it wriggles side to side; scritched, it leans into the hand. Whole pixels, so no seams.
       let shimmy = tickling ? [0, 1, 0, -1][floor(since * 12) % 4] * p : scritch > 0 ? sign(dragX) * p : 0
       let bodyX = bx + shimmy
       let bodyY = by - hop
 
       // The tail tip flicks, faster when it's pleased.
-      let flick = (petting || scritch > 0 ? [0, 1, 1, 0, -1, -1][floor(since * 10) % 6] : [0, 0, 1, 1, 0, 0, -1, -1][floor(time * 1.6) % 8]) * p
+      let flick = (petting || scritch > 0 ? [0, 1, 1, 0, -1, -1][floor(since * 10) % 6] : [0, 1, 1, 0, -1, -1][now % 6]) * p
       sprite(tailArt.take(4), bodyX + 14 * p + flick, bodyY + 8 * p + breath, p, palette: pal)
       sprite(tailArt.drop(4), bodyX + 14 * p, bodyY + 12 * p + breath, p, palette: pal)
       if raining {
@@ -288,11 +294,11 @@ widget "red panda" {
       sprite(pandaArt, bodyX, bodyY + breath, p, palette: bodyPal)
       sprite(pandaArt, bodyX, bodyY, p, palette: feetPal)
       // An ear twitches now and then.
-      if time % 6.1 < 0.2 { rect(bodyX + 12 * p, bodyY + breath - p, 3 * p, p, fill: rust) }
+      if now % 7 == 0 { rect(bodyX + 12 * p, bodyY + breath - p, 3 * p, p, fill: rust) }
 
       // Eyes, in the white patches: columns 3-5 and 10-12, rows 5-6.
       let ey = bodyY + breath
-      let blink = time % 4.3 < 0.15
+      let blink = now % 7 == 3
       if waking {
         // A yawn: eyes squeezed shut, mouth wide open.
         for e in [3, 10] { rect(bodyX + e * p, ey + 6 * p, 3 * p, s, fill: ink) }
@@ -327,7 +333,7 @@ widget "red panda" {
         for e in [3, 10] { rect(bodyX + e * p, ey + 6 * p, 3 * p, s, fill: ink) }
       } else {
         // Looking around, or at the last tap, or up at a bamboo thought.
-        let lx = looking ? sign(tapX - (bodyX + 8 * p)) : hungry ? 1 : [0, 1, 0, -1][floor(time / 2.7) % 4]
+        let lx = looking ? sign(tapX - (bodyX + 8 * p)) : hungry ? 1 : [0, 1, 0, -1][floor(now / 3) % 4]
         let ly = looking ? (tapY < ey + 5 * p ? -1 : tapY > ey + 12 * p ? 1 : 0) : hungry ? -1 : 0
         for e in [3, 10] {
           rect(bodyX + (e + (lx + 1) / 2) * p, ey + (5 + (ly + 1) / 2) * p, 2 * p, 2 * p, fill: ink)

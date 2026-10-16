@@ -21,7 +21,7 @@ OWL_WIDGETS=~/my-widgets quickshell -p runtimes/quickshell     # a folder of you
 | `OwlCanvas.qml` | `Canvas` drawing calls, replayed onto a QML Canvas each frame |
 | `OwlTerminal.qml` | `Terminal { }` |
 | `OwlHost.qml` | what a widget needs from the shell around it, with defaults |
-| `owl-source` | android.device, android.system (with the Arch facts as `linux`) and android.volume, read from Linux |
+| `owl-source` | android.device, android.system (with the Arch facts as `linux`), android.volume and android.modes, read from Linux |
 | `shell.qml` | a board of widgets in a window: the example, and `quickshell -p`'s entry |
 
 Quickshell draws everything; `Owl.js` decides what. Each widget is compiled

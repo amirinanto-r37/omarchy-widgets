@@ -1,5 +1,5 @@
 widget "owl" {
-  meta { description: "A pixel owl to look after. Tap to hatch it, feed it and pet it; it sleeps at night and dances to your music"; version: "1.1"; license: "MIT"; category: "fun" }
+  meta { description: "A pixel owl to look after. Tap to hatch it, feed it and pet it; it sleeps at night and dances to your music"; version: "1.1"; license: "MIT"; category: "pets" }
   page: 2
   order: 1
   size: 3x3

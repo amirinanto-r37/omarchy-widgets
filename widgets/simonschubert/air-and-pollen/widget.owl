@@ -1,11 +1,14 @@
 widget "air and pollen" {
-  meta { description: "Air quality and today's pollen where you are, from Open-Meteo (Copernicus), located by IP via wttr.in. Tap it for the next 24 hours, pollutants and every pollen type"; version: "1.0"; license: "MIT"; category: "world"; owl: 5 }
+  meta { description: "Air quality and today's pollen where you are, from Open-Meteo (Copernicus), located by IP or a city you type, via wttr.in. Tap it for the next 24 hours, pollutants and every pollen type"; version: "1.1"; license: "MIT"; category: "world"; owl: 5 }
   size: 3x2
   minSize: 3x2
 
   source now = clock every 1m
-  // Where you are, by IP. The same request as the today widget, so the two share it.
-  source wx = http("https://wttr.in/?format=j1") every 30m timeout 10s json
+  state city = "" persist
+  // The city, percent-encoded so "/", "?", "&" or "#" in it can't break the URL. Empty means located by IP.
+  let q = city.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "+")
+  // Where you are. The same request as the today widget, so the two share it.
+  source wx = http("https://wttr.in/${q}?format=j1") every 30m timeout 10s json
   let area = wx.nearest_area[0]
   let lat = num(area.latitude)
   let lon = num(area.longitude)
@@ -14,6 +17,8 @@ widget "air and pollen" {
   source air = http("https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}&current=european_aqi,us_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,uv_index&hourly=european_aqi,us_aqi,alder_pollen,birch_pollen,grass_pollen,mugwort_pollen,olive_pollen,ragweed_pollen&forecast_days=2&timezone=auto&timeformat=unixtime") every 30m timeout 15s json status
   // The first request goes out before the location is known; ask again once it is.
   when lat != null { refresh() }
+  // And again when a new city moves it.
+  on lat { refresh() }
 
   let cur = air.ok ? air.out.current : null
   let hourly = air.ok ? air.out.hourly : null
@@ -125,6 +130,11 @@ widget "air and pollen" {
 
   screen {
     title: "air and pollen"
+    Input {
+      text: city
+      placeholder: "city · empty = auto"
+      onSubmit: { city = trim(value); refresh() }
+    }
     if problem != null {
       Text { text: problem; style: body; color: muted }
     } else {

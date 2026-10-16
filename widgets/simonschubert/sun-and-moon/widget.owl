@@ -1,13 +1,16 @@
 widget "sun and moon" {
-  meta { description: "Sunrise, sunset, daylight left and tonight's moon phase, located by IP via wttr.in"; version: "1.1"; license: "MIT"; category: "world" }
+  meta { description: "Sunrise, sunset, daylight left and tonight's moon phase, located by IP or a city you type, via wttr.in"; version: "1.2"; license: "MIT"; category: "world"; owl: 5 }
   size: 3x3
   minSize: 3x3
 
   requires { pacman: ["curl", "jq"] }
 
+  state city = "" persist
+  // The city, percent-encoded so it can't break the URL or the shell's single quotes. Empty means located by IP.
+  let q = city.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "+")
   // wttr.in gives local clock times ("07:14 AM"); date turns them into Unix time for today and tomorrow.
   source sky = cmd("""
-    IFS=$'\t' read -r place rise set next phase illum < <(curl -fsm 12 'https://wttr.in/?format=j1' | jq -r '[
+    IFS=$'\t' read -r place rise set next phase illum < <(curl -fsm 12 'https://wttr.in/${q}?format=j1' | jq -r '[
       .nearest_area[0].areaName[0].value, (.weather[0].astronomy[0] | .sunrise, .sunset),
       .weather[1].astronomy[0].sunrise, (.weather[0].astronomy[0] | .moon_phase, .moon_illumination)
     ] | @tsv') || exit
@@ -20,6 +23,8 @@ widget "sun and moon" {
   let day = now >= sky.rise && now < sky.set
   let p = clamp((now - sky.rise) / (sky.set - sky.rise), 0, 1)
   let waxing = contains(sky.phase, "Waxing") || contains(sky.phase, "First")
+
+  onTap: screen()
 
   Column {
     gap: 4
@@ -63,5 +68,15 @@ widget "sun and moon" {
       }
       Text { text: "${lower(sky.phase)} · ${sky.illum}%"; fontSize: 11; maxLines: 1; weight: 1 }
     }
+  }
+
+  screen {
+    title: "sun and moon"
+    Input {
+      text: city
+      placeholder: "city · empty = auto"
+      onSubmit: { city = trim(value); refresh() }
+    }
+    Text { text: sky == null ? "…" : lower(sky.place); style: small; color: muted }
   }
 }

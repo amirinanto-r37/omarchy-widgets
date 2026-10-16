@@ -1,11 +1,14 @@
 widget "planes overhead" {
-  meta { description: "Aircraft around you on a live radar, from the OpenSky Network, located by IP via wttr.in. Tap it for every flight's altitude, speed and distance"; version: "1.0"; license: "MIT"; category: "world"; owl: 5 }
+  meta { description: "Aircraft around you on a live radar, from the OpenSky Network, located by IP or a city you type, via wttr.in. Tap it for every flight's altitude, speed and distance"; version: "1.1"; license: "MIT"; category: "world"; owl: 5 }
   size: 3x3
   minSize: 2x2
 
   source now = clock every 1s
-  // Where you are, by IP. The same request as the today widget, so the two share it.
-  source wx = http("https://wttr.in/?format=j1") every 30m timeout 10s json
+  state city = "" persist
+  // The city, percent-encoded so "/", "?", "&" or "#" in it can't break the URL. Empty means located by IP.
+  let q = city.replace("%", "%25").replace("+", "%2B").replace("/", "%2F").replace("?", "%3F").replace("#", "%23").replace("&", "%26").replace("'", "%27").replace(" ", "+")
+  // Where you are. The same request as the today widget, so the two share it.
+  source wx = http("https://wttr.in/${q}?format=j1") every 30m timeout 10s json
   let area = wx.nearest_area[0]
   let lat = num(area.latitude)
   let lon = num(area.longitude)
@@ -20,6 +23,8 @@ widget "planes overhead" {
   source sky = http("https://opensky-network.org/api/states/all?lamin=${fixed(lat - dLat, 3)}&lomin=${fixed(lon - dLon, 3)}&lamax=${fixed(lat + dLat, 3)}&lomax=${fixed(lon + dLon, 3)}") every 2m timeout 15s json status
   // The first request goes out before the location is known; ask again once it is.
   when lat != null { refresh() }
+  // And again when a new city moves it.
+  on lat { refresh() }
 
   // OpenSky's state vectors: [icao24, callsign, country, time_position, last_contact, lon, lat,
   // baro_altitude, on_ground, velocity, true_track, vertical_rate, sensors, geo_altitude, ...].
@@ -115,6 +120,11 @@ widget "planes overhead" {
 
   screen {
     title: "planes overhead"
+    Input {
+      text: city
+      placeholder: "city · empty = auto"
+      onSubmit: { city = trim(value); refresh() }
+    }
     Column {
       scroll: true
       gap: 10

@@ -1,8 +1,8 @@
 widget "vcard" {
   meta {
-    owl: 5
+    owl: 6
     description: "Your contact details as a QR code, to share on the fly. Tap for a full-screen code, or edit the details in place."
-    version: "1.0"
+    version: "1.1"
     license: "MIT"
     category: "productivity"
   }
@@ -25,31 +25,37 @@ widget "vcard" {
   // Not persisted: the screen should open on the code, not the form.
   state editing = false
 
-  // An apostrophe would end the shell quoting around the vCard below, so strip
-  // it and flatten newlines: both would corrupt the card.
-  let name = replace(replace(sName, "'", ""), "\n", " ")
-  let org = replace(replace(sOrg, "'", ""), "\n", " ")
-  let role = replace(replace(sRole, "'", ""), "\n", " ")
-  let tel = replace(replace(sTel, "'", ""), "\n", " ")
-  let mail = replace(replace(sMail, "'", ""), "\n", " ")
-  let site = replace(replace(sSite, "'", ""), "\n", " ")
+  // A newline would split a vCard line, so flatten it. Apostrophes stay: the
+  // card goes into the command as sh(vcard), one quoted word whatever it holds.
+  let name = replace(sName, "\n", " ")
+  let org = replace(sOrg, "\n", " ")
+  let role = replace(sRole, "\n", " ")
+  let tel = replace(sTel, "\n", " ")
+  let mail = replace(sMail, "\n", " ")
+  let site = replace(sSite, "\n", " ")
 
   // Any one field is enough to share something, so the card counts as filled
   // if a single one of them is set, not just a name.
-  let any = name != "" || org != "" || role != "" || tel != "" || mail != "" || site != ""
+  let filled = name != "" || org != "" || role != "" || tel != "" || mail != "" || site != ""
 
   // FN is the one field a vCard can't do without, so fall back to whatever the
   // person did give: a scanner should still show a contact, not reject the card.
   let label = name != "" ? name : org != "" ? org : tel != "" ? tel : mail != "" ? mail : site != "" ? site : ""
+
+  // In text values a vCard reads \ , and ; as an escape and delimiters, so a
+  // literal one gets a backslash in front (backslashes first).
+  let fnText = replace(replace(replace(label, "\\", "\\\\"), ",", "\\,"), ";", "\\;")
+  let orgText = replace(replace(replace(org, "\\", "\\\\"), ",", "\\,"), ";", "\\;")
+  let roleText = replace(replace(replace(role, "\\", "\\\\"), ",", "\\,"), ";", "\\;")
 
   // Every line is a plain PROPERTY:value, and every line break is a real one.
   // No N: and no TYPE= parameters, which are the only things needing the ';' and
   // ',' delimiters: they split into components and parameter lists that some
   // readers choke on. FN carries the name on its own, so nothing is lost.
   let fields = ["BEGIN:VCARD", "VERSION:3.0"]
-    + ["FN:" + label]
-    + (org != "" && org != label ? ["ORG:" + org] : [])
-    + (role != "" ? ["TITLE:" + role] : [])
+    + ["FN:" + fnText]
+    + (org != "" && org != label ? ["ORG:" + orgText] : [])
+    + (role != "" ? ["TITLE:" + roleText] : [])
     + (tel != "" ? ["TEL:" + tel] : [])
     + (mail != "" ? ["EMAIL:" + mail] : [])
     + (site != "" ? ["URL:" + site] : [])
@@ -62,24 +68,23 @@ widget "vcard" {
 
   // qrencode -t ASCII prints each module as two identical characters, so awk
   // halves each row into one character per module, ready for sprite().
-  // Single quotes keep everything literal inside the command.
-  source qr = cmd("printf '%s' '${vcard}' | qrencode -t ASCII -l M -m 4 -o - | awk \"{o=\\\"\\\"; for(i=1;i<=length(\\\$0);i+=2){c=substr(\\\$0,i,1); o=o (c==\\\"#\\\" ? \\\"d\\\" : \\\".\\\")} print o}\"") every 5s
+  // sh(vcard) makes the card one quoted word, apostrophes and all.
+  source qr = cmd("printf %s ${sh(vcard)} | qrencode -t ASCII -l M -m 4 -o - | awk \"{o=\\\"\\\"; for(i=1;i<=length(\\\$0);i+=2){c=substr(\\\$0,i,1); o=o (c==\\\"#\\\" ? \\\"d\\\" : \\\".\\\")} print o}\"") every 1h
 
   let rows = lines(qr)
-  let has = any
 
   // Nothing entered yet: go straight to the editor, otherwise show the code.
-  onTap: { editing = !has; screen() }
+  onTap: { editing = !filled; screen() }
 
   Column { gap: 2; fill: true; align: center; justify: center
     Text {
-      text: has ? (name != "" ? name : label) : "vCard"
+      text: filled ? (name != "" ? name : label) : "vCard"
       style: title
       align: center
       maxLines: 3
     }
     Text {
-      text: has ? "tap to share" : "tap to add your details"
+      text: filled ? "tap to share" : "tap to add your details"
       style: muted
       fontSize: 11
       align: center
@@ -89,7 +94,7 @@ widget "vcard" {
   screen {
     title: "my contact"
     Column { scroll: true; gap: 10; align: center
-      if !has {
+      if !filled {
         Text { text: "No details yet"; style: title }
         Text {
           text: "Fill in the form below and the code appears here."

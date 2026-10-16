@@ -4,7 +4,7 @@ widget "nba" {
     description: "NBA scores from ESPN with team logos: live games first, then last night's finals and today's tip-offs. Tap for every game and both conference standings"
     version: "1.0"
     license: "MIT"
-    category: "world"
+    category: "sport"
   }
   requires { pacman: ["curl", "jq"] }
   page: 1

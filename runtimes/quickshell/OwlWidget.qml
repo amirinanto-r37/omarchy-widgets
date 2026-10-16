@@ -174,6 +174,8 @@ Item {
       if (name === "tileHeight") return root.height / root.dp
       if (name === "screenWidth") return root.screenWidth / root.dp
       if (name === "screenHeight") return root.screenHeight / root.dp
+      // Omarchy's corners are square.
+      if (name === "corners") return 0
       return null
     },
     act: function(name, args) { root.act(name, args) },

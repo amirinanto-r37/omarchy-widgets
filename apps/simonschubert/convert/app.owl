@@ -1,0 +1,109 @@
+app "convert" {
+  meta { owl: 8; description: "A unit converter: length, mass, temperature, volume, speed, area, data and time, every unit at once"; version: "1.0"; license: "MIT"; category: "productivity" }
+  title: "convert"
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 15h33M31 7l8 8-8 8"/>
+    <path d="M42 33H9M17 25l-8 8 8 8"/>
+  </svg>"""
+
+  state cat = "length" persist
+  state amount = "1"
+  // The unit typed in and the one it's shown in large; tapping another unit below shows it there.
+  state pick = {from: "m", to: "ft"} persist
+
+  // Each unit as [symbol, size in the category's base unit, name]; temperature is converted apart.
+  let cats = {
+    length: [["m", 1, "meter"], ["km", 1000, "kilometer"], ["cm", 0.01, "centimeter"], ["mm", 0.001, "millimeter"], ["mi", 1609.344, "mile"], ["yd", 0.9144, "yard"], ["ft", 0.3048, "foot"], ["in", 0.0254, "inch"], ["nmi", 1852, "nautical mile"]],
+    mass: [["kg", 1, "kilogram"], ["g", 0.001, "gram"], ["mg", 0.000001, "milligram"], ["t", 1000, "tonne"], ["lb", 0.45359237, "pound"], ["oz", 0.028349523125, "ounce"], ["st", 6.35029318, "stone"]],
+    temperature: [["°C", 1, "celsius"], ["°F", 1, "fahrenheit"], ["K", 1, "kelvin"]],
+    volume: [["l", 1, "liter"], ["ml", 0.001, "milliliter"], ["m³", 1000, "cubic meter"], ["gal", 3.785411784, "US gallon"], ["qt", 0.946352946, "US quart"], ["cup", 0.2365882365, "US cup"], ["fl oz", 0.0295735295625, "US fluid ounce"], ["uk gal", 4.54609, "UK gallon"]],
+    speed: [["km/h", 1, "kilometers an hour"], ["m/s", 3.6, "meters a second"], ["mph", 1.609344, "miles an hour"], ["kn", 1.852, "knots"]],
+    area: [["m²", 1, "square meter"], ["km²", 1000000, "square kilometer"], ["ha", 10000, "hectare"], ["ac", 4046.8564224, "acre"], ["ft²", 0.09290304, "square foot"], ["mi²", 2589988.110336, "square mile"]],
+    data: [["B", 1, "byte"], ["KB", 1000, "kilobyte"], ["MB", 1000000, "megabyte"], ["GB", 1000000000, "gigabyte"], ["TB", 1000000000000, "terabyte"], ["KiB", 1024, "kibibyte"], ["MiB", 1048576, "mebibyte"], ["GiB", 1073741824, "gibibyte"]],
+    time: [["s", 1, "second"], ["min", 60, "minute"], ["h", 3600, "hour"], ["day", 86400, "day"], ["wk", 604800, "week"], ["yr", 31557600, "year"]]
+  }
+  let units = get(cats, cat, [])
+  let from = units.find(u => u[0] == pick.from) ?? units[0]
+  let x = num(replace(amount, ",", "."), null)
+  // In the base unit: meters, kilograms, °C, ...
+  let base = x == null ? null : cat != "temperature" ? x * from[1] : from[0] == "°F" ? (x - 32) * 5 / 9 : from[0] == "K" ? x - 273.15 : x
+  // Every unit with the amount in it: fixed digits, never 6.2E-4, and no trailing zeros.
+  let rows = units.map(u => {
+    sym: u[0],
+    name: u[2],
+    text: base == null ? "–" : (match(fixed(cat != "temperature" ? base / u[1] : u[0] == "°F" ? base * 9 / 5 + 32 : u[0] == "K" ? base + 273.15 : base, abs(base / u[1]) >= 1000 ? 2 : abs(base / u[1]) >= 1 ? 4 : 8), '^(-?[0-9]+(?:[.][0-9]*[1-9])?)') ?? ["?"])[0]
+  })
+  let to = rows.find(r => r.sym == pick.to && r.sym != from[0]) ?? rows.find(r => r.sym != from[0])
+
+  Column {
+    gap: 14
+    fill: true
+    Flow {
+      gap: 6
+      for c in keys(cats) {
+        Button { text: c; color: cat == c ? accent : muted; onTap: { cat = c; pick = {from: get(cats, c)[0][0], to: get(cats, c)[1][0]} } }
+      }
+    }
+
+    // From: what you type, in which unit.
+    Column {
+      gap: 2
+      padding: [14, 10]
+      border: 1
+      borderColor: accent
+      background: alpha(accent, 0.08)
+      Row {
+        gap: 10
+        align: center
+        Input { text: amount; placeholder: "0"; fontSize: 30; weight: 1; onChange: amount = value }
+        Text { text: from[0]; fontSize: 22; color: accent; width: 84; align: end; maxLines: 1 }
+      }
+      Text { text: from[2]; style: small; color: muted }
+    }
+
+    // To: the unit picked below, large, with the swap between them.
+    Row {
+      gap: 10
+      align: center
+      Column {
+        gap: 2
+        weight: 1
+        padding: [14, 10]
+        border: 1
+        borderColor: border
+        onTap: copy(to.text)
+        Row {
+          gap: 10
+          Text { text: to.text; fontSize: 30; bold: true; weight: 1; maxLines: 1 }
+          Text { text: to.sym; fontSize: 22; color: accent; width: 84; align: end; maxLines: 1 }
+        }
+        Text { text: "${to.name} · tap to copy"; style: small; color: muted }
+      }
+      Button { text: "⇅"; color: accent; onTap: { amount = to.text == "–" ? amount : to.text; pick = {from: to.sym, to: from[0]} } }
+    }
+
+    Text { text: "all ${cat} units"; style: label; color: muted }
+    Column {
+      scroll: true
+      weight: 1
+      Grid {
+        columns: 2
+        gap: 8
+        for r in rows {
+          if r.sym != from[0] {
+            Column {
+              gap: 2
+              padding: [12, 8]
+              border: 1
+              borderColor: r.sym == to.sym ? accent : border
+              background: r.sym == to.sym ? alpha(accent, 0.08) : null
+              onTap: pick = {from: pick.from, to: r.sym}
+              Text { text: r.text; fontSize: 17; maxLines: 1 }
+              Text { text: "${r.sym} · ${r.name}"; style: small; color: r.sym == to.sym ? accent : muted; maxLines: 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

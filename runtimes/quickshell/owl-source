@@ -5,6 +5,7 @@
 #   owl-source device   {model, maker, android, sdk, soc}
 #   owl-source system   {memory, storage, display, kernel, ..., linux}
 #   owl-source volume   {level, muted, max}
+#   owl-source modes    {dnd, saver, ringer, torch}
 #
 # One JSON object on stdout, in the shape the Android launcher gives the same
 # source (omarchy-widgets' docs/LANGUAGE.md), so a widget written for the
@@ -29,7 +30,7 @@ set -u
 me=owl-source
 
 usage() {
-  echo "usage: $me [--root DIR] device|system|volume" >&2
+  echo "usage: $me [--root DIR] device|system|volume|modes" >&2
   exit 2
 }
 
@@ -42,7 +43,7 @@ while [ $# -gt 0 ]; do
       root=${2%/}
       shift 2
       ;;
-    device | system | volume)
+    device | system | volume | modes)
       [ -z "$what" ] || usage
       what=$1
       shift
@@ -215,6 +216,16 @@ volume() {
   level=$(printf '%s\n' "$line" | awk '{ printf "%d", $2 * 100 + 0.5 }')
   case $line in *MUTED*) muted=true ;; esac
   printf '{"level":%s,"muted":%s,"max":100}\n' "$(num "$level")" "$muted"
+}
+
+# Do Not Disturb is mako's do-not-disturb mode, as Omarchy toggles it; battery
+# saver is the power-saver profile. A phone's ringer and torch have no Linux
+# counterpart: the ringer is always normal, and a null torch hides torch buttons.
+modes() {
+  local dnd=false saver=false
+  makoctl mode 2>/dev/null | grep -qx do-not-disturb && dnd=true
+  [ "$(powerprofilesctl get 2>/dev/null)" = power-saver ] && saver=true
+  printf '{"dnd":%s,"saver":%s,"ringer":"normal","torch":null}\n' "$dnd" "$saver"
 }
 
 "$what"

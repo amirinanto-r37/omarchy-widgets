@@ -1,0 +1,61 @@
+app "hacker news" {
+  meta { owl: 8; description: "A Hacker News reader: the front page, newest, Ask and Show HN, with points and comments"; version: "1.0"; license: "MIT"; category: "news" }
+  title: "hacker news"
+  icon: """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 19l8-10 8 10z" fill="currentColor"/>
+    <path d="M28 11h15M28 19h15M6 29h37M6 38h28"/>
+  </svg>"""
+
+  state feed = "top"
+  // Fixed URLs, one per tab, so the reviewer sees every address it fetches.
+  source top = http("https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=50") every 10m json timeout 15s
+  source fresh = http("https://hn.algolia.com/api/v1/search_by_date?tags=story&hitsPerPage=50") every 10m json timeout 15s
+  source ask = http("https://hn.algolia.com/api/v1/search?tags=ask_hn&hitsPerPage=50") every 10m json timeout 15s
+  source show = http("https://hn.algolia.com/api/v1/search?tags=show_hn&hitsPerPage=50") every 10m json timeout 15s
+  source now = clock every 1m
+
+  let hn = feed == "new" ? fresh : feed == "ask" ? ask : feed == "show" ? show : top
+  let stories = hn.hits ?? []
+
+  component Tab(name) {
+    Button { text: name; color: feed == name ? accent : muted; onTap: feed = name }
+  }
+
+  Column {
+    gap: 10
+    fill: true
+    Row {
+      gap: 6
+      Tab { name: "top" }
+      Tab { name: "new" }
+      Tab { name: "ask" }
+      Tab { name: "show" }
+    }
+    if hn == null {
+      Text { text: "loading…"; color: muted }
+    }
+    Column {
+      scroll: true
+      weight: 1
+      gap: 14
+      for s, i in stories key s.objectID {
+        let link = "https://news.ycombinator.com/item?id=${s.objectID}"
+        let site = match(s.url ?? "", '^https?://(?:www\.)?([^/]+)')[0]
+        let age = now == null ? "" : " · ${fmtDuration(max(now - s.created_at_i, 60))} ago"
+        Row {
+          gap: 10
+          align: top
+          Text { text: "${i + 1}"; color: muted; width: 28; align: end }
+          Column {
+            gap: 3
+            weight: 1
+            // The story opens its link, or its discussion when it has none; the line under it opens the discussion.
+            Text { text: s.title; bold: true; maxLines: 3; onTap: url(s.url ?? link) }
+            Text { text: site ?? "news.ycombinator.com"; style: small; color: muted; maxLines: 1; onTap: url(s.url ?? link) }
+            Text { text: "${s.points} points · ${s.num_comments ?? 0} comments${age}"; style: small; color: orange; onTap: url(link) }
+          }
+        }
+      }
+    }
+  }
+}

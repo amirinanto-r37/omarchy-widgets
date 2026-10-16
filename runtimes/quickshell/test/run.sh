@@ -3,9 +3,10 @@
 #
 # OwlOracle.java drives tools/owl.jar's own compiler and evaluator with a
 # fixed host and prints every evaluated property and drawing call as JSON;
-# walk.js does the same walk with Owl.js. They must print the same bytes:
+# walk.js does the same walk with Owl.js. They must print the same JSON, numbers
+# alike to 1e-9:
 #
-#   edge.owl                196 expressions chosen to break a port
+#   edge.owl                198 expressions chosen to break a port
 #   <widget>.fixture.json   store widgets with the data their sources gave once
 #   every store widget      with no source data at all
 #
@@ -30,12 +31,39 @@ java_opts=(-Duser.timezone=Europe/Berlin -Duser.language=en -Duser.country=US)
 
 javac -cp "$jar" -d "$out" "$here/OwlOracle.java"
 
+# The same JSON, except that numbers may differ in their last bits: sin, cos and
+# pow round differently in the JVM and in V8, so a curve can land a few ulps apart.
+same() {
+  cmp -s "$1" "$2" && return
+  node -e '
+    const fs = require("fs")
+    const [a, b] = process.argv.slice(1).map(f => JSON.parse(fs.readFileSync(f, "utf8")))
+    const close = (x, y) => Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(x), Math.abs(y))
+    // Strings too, since points and paths arrive as text: the same words, the numbers close.
+    const parts = s => s.split(/(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)/)
+    const eq = (x, y) => {
+      if (typeof x === "number" && typeof y === "number") return close(x, y)
+      if (typeof x === "string" && typeof y === "string") {
+        if (x === y) return true
+        const p = parts(x), q = parts(y)
+        return p.length === q.length && p.every((s, i) => i % 2 ? close(+s, +q[i]) : s === q[i])
+      }
+      if (Array.isArray(x) && Array.isArray(y)) return x.length === y.length && x.every((v, i) => eq(v, y[i]))
+      if (x && y && typeof x === "object" && typeof y === "object") {
+        const k = Object.keys(x)
+        return k.length === Object.keys(y).length && k.every(n => n in y && eq(x[n], y[n]))
+      }
+      return x === y
+    }
+    process.exit(eq(a, b) ? 0 : 1)' "$1" "$2"
+}
+
 failed=0
 check() {
   local name=$1 src=$2 fixture=$3
   java "${java_opts[@]}" -cp "$jar:$out" OwlOracle "$src" "$fixture" >"$out/java.json" 2>/dev/null
   node "$here/walk.js" "$owl" "$src" "$fixture" >"$out/js.json" 2>/dev/null
-  if cmp -s "$out/java.json" "$out/js.json"; then
+  if same "$out/java.json" "$out/js.json"; then
     echo "ok - $name"
   else
     echo "not ok - $name"

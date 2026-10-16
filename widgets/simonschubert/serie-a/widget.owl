@@ -4,7 +4,7 @@ widget "serie-a" {
     description: "Serie A results, live scores and kick-offs from ESPN with club crests, and the table with European and relegation places. Tap for every match"
     version: "1.0"
     license: "MIT"
-    category: "world"
+    category: "sport"
   }
   requires { pacman: ["curl", "jq"] }
   page: 1

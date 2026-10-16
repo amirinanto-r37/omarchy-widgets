@@ -1,0 +1,66 @@
+widget "bitcoin-ticker" {
+  size: 6x1
+  minSize: 3x1
+  padding: 0
+  meta { description: "A one-row Bitcoin ticker: the coin, the live USD price, and a faint 24-hour trend line. Tap for Coinbase."; version: "1.0"; license: "MIT"; category: "finance" }
+
+  source btc = http("https://api.coinbase.com/v2/prices/BTC-USD/spot") every 1m json timeout 10s
+  // 15-minute candles, newest first: [time, low, high, open, close, volume]
+  source candles = http("https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=900") every 5m json timeout 10s
+
+  let btcOrange = "#F7931A"
+  // an error reply has no amount: show "…" rather than a wrong "$0"
+  let amount = btc.data.amount
+  let p = int(num(amount, 0))
+  // 83171 -> "83,171"
+  let price = p >= 1000000 ? "${floor(p / 1000000)},${pad(floor(p % 1000000 / 1000), 3, "0")},${pad(p % 1000, 3, "0")}" : p >= 1000 ? "${floor(p / 1000)},${pad(p % 1000, 3, "0")}" : "${p}"
+  // the last 24 hours, oldest first
+  let closes = (candles[0] != null ? candles : []).take(96).reverse().map(c => c[4])
+  let lo = first(closes.sort())
+  let hi = last(closes.sort())
+  let wide = cols >= 5
+  let compact = cols < 4
+  let label = amount == null ? "…" : "$${price}"
+  // "$83,171" fits every size; "$104,005" and "$1,004,005" need a smaller font, and the last one the chart's room
+  let fs = (compact ? 20 : 28) * (len(label) <= 7 ? 1 : len(label) <= 8 ? 0.9 : 0.78)
+
+  onTap: url("https://www.coinbase.com/price/bitcoin")
+
+  Box {
+    fill: true
+    Canvas {
+      // warm light falling from behind the coin
+      rect(0, 0, width, height, fill: linear(0, 0, width, 0, [alpha(btcOrange, 0.2), alpha(btcOrange, 0.05), alpha(btcOrange, 0)]))
+      rect(0, 0, width, height, fill: radial(height * 0.9, height / 2, height * 2.2, [alpha(btcOrange, 0.22), alpha(btcOrange, 0)]))
+    }
+    Row {
+      fill: true
+      padding: [compact ? 12 : 18, 0]
+      align: center
+      gap: compact ? 8 : 14
+      Canvas {
+        size: compact ? 28 : 36
+        let r = width / 2
+        circle(r, r + 1.5, r, fill: alpha("#000000", 0.25))
+        circle(r, r, r, fill: linear(0, 0, width, width, ["#FFC266", btcOrange, "#C96A00"]))
+        circle(r, r, r - 2.5, stroke: alpha("#FFFFFF", 0.4), width: 1.2)
+        rotate(14, r, r) { text("₿", r, r + 1, size: r * 1.2, bold: true, align: center, color: "#FFFFFF") }
+      }
+      Text { text: label; font: sans; fontSize: fs; bold: true; color: foreground; maxLines: 1; weight: 1 }
+      if wide && len(label) <= 8 && len(closes) > 1 && hi > lo {
+        // 24h trend, fading in from the left so it never fights the price
+        Canvas {
+          width: (tileWidth ?? 360) * 0.36
+          fill: height
+          let n = len(closes)
+          let top = height * 0.28
+          let h = height * 0.44
+          let pts = range(n).map(i => [i * (width - 6) / (n - 1), top + h * (1 - (closes[i] - lo) / (hi - lo))])
+          path(pts, stroke: linear(0, 0, width, 0, [alpha(btcOrange, 0), alpha(btcOrange, 0.6), btcOrange]), width: 1.8, cap: round)
+          circle(pts[n - 1][0], pts[n - 1][1], 6, fill: alpha(btcOrange, 0.3))
+          circle(pts[n - 1][0], pts[n - 1][1], 3, fill: btcOrange)
+        }
+      }
+    }
+  }
+}

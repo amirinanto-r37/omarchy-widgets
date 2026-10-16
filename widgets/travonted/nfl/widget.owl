@@ -4,7 +4,7 @@ widget "nfl" {
     description: "NFL scores and standings from ESPN with team logos: live games first, then finals and this week's upcoming games. Tap for every game and both conferences"
     version: "1.0"
     license: "MIT"
-    category: "world"
+    category: "sport"
   }
   requires { pacman: ["curl"] }
   page: 1

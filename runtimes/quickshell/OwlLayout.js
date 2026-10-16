@@ -299,6 +299,8 @@ function imageSources(ops, out) {
 function url(src, home) {
   if (!src) return ""
   var s = String(src)
+  // An Android app's icon (owl 7): there are no Android apps here, so nothing is drawn.
+  if (s.indexOf("app:") === 0) return ""
   if (s.indexOf("~/") === 0) return "file://" + home + s.slice(1)
   if (s.charAt(0) === "/") return "file://" + s
   return s

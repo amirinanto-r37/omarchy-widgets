@@ -1,0 +1,142 @@
+widget "duolingo" {
+  size: 3x2
+  minSize: 3x2
+  meta { description: "Tu racha y tus cursos de Duolingo en vivo. Escribe tu usuario en «configurar»; toca el widget para abrir la app"; version: "1.0"; license: "MIT"; category: "fun"; owl: 5 }
+  requires { pacman: [] }
+
+  // Cada persona escribe su propio usuario: se guarda en el launcher, nunca en el archivo.
+  state username = "" persist
+
+  // La API pública del perfil: los mismos datos que ve la app. Sin usuario aún,
+  // se consulta un nombre que no existe (la API rechaza un username vacío).
+  let query = username == "" ? "owl-unset" : username
+  source duo = http("https://www.duolingo.com/2017-06-30/users?username=${query}") every 30m timeout 15s json
+  let u = duo.users[0]
+  let streak = num(u.streak)
+  let totalXp = num(u.totalXp)
+  let totalShort = totalXp >= 1000 ? fixed(totalXp / 1000, 1) + "k" : str(totalXp)
+  let courses = (u.courses ?? []).sortBy(c => -num(c.xp))
+  // El ajedrez no aparece en `courses`: su XP es lo que sobra del total.
+  let chessXp = totalXp - sum(courses.map(c => num(c.xp)))
+  let hasChess = chessXp > 0 && contains(u.currentCourseId ?? "", "CHESS")
+  let all = flatten([courses, hasChess ? [{ learningLanguage: "chess", title: "Ajedrez", xp: chessXp }] : []]).sortBy(c => -num(c.xp))
+  let topXp = max(all.map(c => num(c.xp)))
+  let langs = {
+    ru: "Ruso", en: "Inglés", it: "Italiano", ja: "Japonés", zh: "Chino", ko: "Coreano",
+    de: "Alemán", fr: "Francés", es: "Español", pt: "Portugués", nl: "Neerlandés",
+    sv: "Sueco", no: "Noruego", da: "Danés", pl: "Polaco", tr: "Turco", hi: "Hindi",
+    ar: "Árabe", he: "Hebreo", el: "Griego", uk: "Ucraniano", vi: "Vietnamita", eo: "Esperanto",
+    chess: "Ajedrez"
+  }
+
+  // Una llama de píxeles, dibujada igual en el mosaico y en la pantalla.
+  let flame = [
+    ".....o.....",
+    "....ooo....",
+    "....oyo....",
+    "...ooyoo...",
+    "...oyyyo...",
+    "..ooyyooo..",
+    "..oyyyyyoo.",
+    ".ooyyyyyyoo",
+    ".oyyyyyyyyo",
+    ".ooyyyyyyoo",
+    "..ooyyyyoo.",
+    "...oooooo..",
+    "....oooo..."
+  ]
+
+  onTap: androidApp("com.duolingo")
+
+  component Flame(sz = 44) {
+    Canvas {
+      width: sz
+      height: sz + sz / 11 * 2
+      let px = sz / 11
+      sprite(flame, 0, (height - 13 * px) / 2, px, palette: { o: orange, y: yellow })
+    }
+  }
+
+  Column {
+    gap: 2
+    Row {
+      align: center
+      Text { text: "racha"; style: label; color: muted; weight: 1; maxLines: 1 }
+      Text { text: username == "" ? "configurar ›" : "detalle ›"; style: label; color: accent; width: 96; align: end; maxLines: 1; onTap: screen() }
+    }
+    Row {
+      gap: 8
+      align: center
+      weight: 1
+      Flame { sz: 40 }
+      Column {
+        gap: 0
+        weight: 1
+        if username == "" {
+          Text { text: "configura"; style: title; color: muted; maxLines: 1 }
+          Text { text: "tu usuario"; style: small; color: muted; maxLines: 1 }
+        } else {
+          Text { text: u == null ? "…" : "${streak}"; style: huge; color: streak > 0 ? orange : muted; maxLines: 1 }
+          Text { text: streak == 1 ? "día seguido" : "días seguidos"; style: small; color: muted; maxLines: 1 }
+        }
+      }
+    }
+    Text { text: username == "" ? "toca para configurar" : (u == null ? "duolingo…" : "${totalShort} XP total"); style: small; color: muted; maxLines: 1 }
+  }
+
+  screen {
+    title: "duolingo"
+    Column {
+      scroll: true
+      gap: 14
+      Input { placeholder: "tu usuario de Duolingo"; clear: true; onSubmit: { username = trim(value); refresh() } }
+      if username == "" {
+        Text { text: "Escribe arriba tu nombre de usuario de Duolingo y pulsa enviar para ver tu racha y tus cursos."; style: body; color: muted }
+      } else {
+        if duo != null && u == null {
+          Text { text: "usuario \"${username}\" no encontrado"; style: body; color: muted }
+        } else {
+          Column {
+            gap: 14
+            Row {
+              gap: 16
+              align: center
+              Flame { sz: 64 }
+              Column {
+                gap: 0
+                weight: 1
+                Text { text: duo == null ? "…" : "${streak}"; fontSize: 44; color: orange; maxLines: 1 }
+                Text { text: streak == 1 ? "día de racha" : "días de racha"; style: body; color: muted }
+                Text { text: "${totalShort} XP en total"; style: small; color: muted }
+              }
+            }
+            Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+            Text { text: "cursos"; style: label; color: accent }
+            for c, i in all key c.learningLanguage {
+              Row {
+                gap: 10
+                align: center
+                let cx = num(c.xp)
+                let cxs = cx >= 1000 ? fixed(cx / 1000, 1) + "k" : str(cx)
+                let isCurrent = contains(u.currentCourseId ?? "", upper(c.learningLanguage))
+                Text { text: get(langs, c.learningLanguage, c.title); style: body; width: 96; maxLines: 1 }
+                Canvas {
+                  height: 8
+                  weight: 1
+                  rect(0, 1, width, 6, radius: 3, fill: alpha(muted, 0.2))
+                  rect(0, 1, max(width * num(c.xp) / max(topXp, 1), 6), 6, radius: 3, fill: isCurrent ? accent : orange)
+                }
+                Text { text: cxs; style: small; color: muted; width: 56; align: end; maxLines: 1 }
+              }
+            }
+            Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+            Row {
+              justify: end
+              Button { text: "abrir duolingo ↗"; onTap: androidApp("com.duolingo") }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,325 @@
+widget "google calendar" {
+  size: 3x4
+  minSize: 2x2
+
+  meta { owl: 6; description: "Upcoming events from one or more Google calendars (or any iCal link). Tap for the full agenda and settings: add calendars, colors, days ahead"; version: "1.2"; license: "MIT"; category: "productivity" }
+  requires { pacman: ["python", "python-icalendar", "python-recurring-ical-events"] }
+
+  // Calendars are { name, url, color, on }, kept by the launcher, not in this file.
+  state cals = [] persist
+  state days = 14 persist
+  state tab = "agenda"
+  state newName = ""
+  state newUrl = ""
+  state addErr = ""
+
+  source now = clock every 1m
+
+  let palette = [accent, blue, green, magenta, orange, cyan, yellow, red]
+  // One URL per calendar, in order, so events' `c` indexes `cals`; "-" skips a hidden one.
+  let urlList = join(cals.map(c => c.on && match(c.url ?? "", "^(https|webcal)://[^'\"`$\\\\\\s]+$") != null ? c.url : "-"), " ")
+
+  // Fetches every calendar's iCal feed, expands recurring events over the next `days`, and keeps
+  // the last good copy in ~/.cache/owl-gcal so the agenda still shows offline. Feeds come
+  // gzipped, and a feed whose events haven't changed reuses what was worked out from it last
+  // time, without parsing it or writing it to the cache again.
+  source ev = cmd("""
+    python3 -c 'import sys, textwrap; exec(textwrap.dedent(sys.argv[1]))' '
+      import sys, json, os, hashlib, urllib.request, zlib
+      from datetime import datetime, date, timedelta, timezone
+      import icalendar, recurring_ical_events
+      days = int(sys.argv[2]); urls = sys.argv[3].split()
+      now = datetime.now(timezone.utc).astimezone()
+      start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+      end = start + timedelta(days=days + 2)
+      cap = 64 * 1024 * 1024
+      cache = os.path.expanduser("~/.cache/owl-gcal"); os.makedirs(cache, exist_ok=True)
+      out = {"events": [], "errors": {}, "names": {}}
+      for i, url in enumerate(urls):
+          if url == "-": continue
+          if url.startswith("webcal://"): url = "https://" + url[9:]
+          path = os.path.join(cache, hashlib.sha1(url.encode()).hexdigest() + ".ics")
+          done = path[:-4] + ".json"
+          try:
+              memo = json.load(open(done))
+          except Exception:
+              memo = {}
+          fresh = True
+          try:
+              req = urllib.request.Request(url, headers={"User-Agent": "omalauncher-calendar", "Accept-Encoding": "gzip"})
+              resp = urllib.request.urlopen(req, timeout=20)
+              data = resp.read(cap + 1)
+              if resp.headers.get("Content-Encoding", "").lower() == "gzip":
+                  data = zlib.decompressobj(31).decompress(data, cap + 1)
+              if len(data) > cap: raise ValueError("feed over 64 MB")
+          except Exception as e:
+              msg = str(getattr(e, "code", "") or getattr(e, "reason", "") or e)[:80]
+              if not os.path.exists(path):
+                  out["errors"][i] = msg; continue
+              out["errors"][i] = "offline, cached (" + msg + ")"
+              data = open(path, "rb").read(); fresh = False
+          # Google stamps every event with the time of the download (DTSTAMP) and lists attendees
+          # in any order, so compare the lines without those.
+          lines = []
+          for l in data.splitlines():
+              if l[:1] == b" " and lines: lines[-1] += l[1:]
+              else: lines.append(l)
+          lines = sorted(l for l in lines if not l.startswith(b"DTSTAMP"))
+          key = hashlib.sha1(bytes([10]).join(lines) + str((start.isoformat(), days, i, str(now.tzinfo))).encode()).hexdigest()
+          del lines
+          if memo.get("k") == key and os.path.exists(path):
+              out["names"][i] = memo["n"]; out["events"] += memo["e"]; continue
+          try:
+              cal = icalendar.Calendar.from_ical(data)
+              if fresh: open(path, "wb").write(data)
+          except Exception as e:
+              if not fresh or not os.path.exists(path):
+                  out["errors"][i] = str(e)[:80]; continue
+              out["errors"][i] = "unreadable, cached (" + str(e)[:60] + ")"
+              cal = icalendar.Calendar.from_ical(open(path, "rb").read())
+          first = len(out["events"])
+          out["names"][i] = str(cal.get("X-WR-CALNAME", ""))
+          for ev in recurring_ical_events.of(cal).between(start, end):
+              s = ev.get("DTSTART").dt; e = ev.get("DTEND").dt if ev.get("DTEND") else None
+              item = {"t": str(ev.get("SUMMARY", "(no title)")), "l": str(ev.get("LOCATION", "")), "c": i}
+              if isinstance(s, datetime):
+                  if s.tzinfo is None: s = s.replace(tzinfo=now.tzinfo)
+                  if e is None or not isinstance(e, datetime): e = s
+                  elif e.tzinfo is None: e = e.replace(tzinfo=now.tzinfo)
+                  out["events"].append(dict(item, d=s.astimezone().date().isoformat(), s=int(s.timestamp()), e=int(e.timestamp()), a=False))
+              else:
+                  e = e if isinstance(e, date) and e > s else s + timedelta(days=1)
+                  d = s
+                  while d < e and d < end.date():
+                      if d >= start.date():
+                          out["events"].append(dict(item, d=d.isoformat(), a=True, s=0, e=0, n=(e - s).days))
+                      d += timedelta(days=1)
+          json.dump({"k": key, "n": out["names"][i], "e": out["events"][first:]}, open(done, "w"), ensure_ascii=False)
+      # Forget the copies of calendars that were removed or hidden.
+      keep = {hashlib.sha1(("https://" + u[9:] if u.startswith("webcal://") else u).encode()).hexdigest() + ".ics" for u in urls}
+      for f in os.listdir(cache):
+          if f.endswith((".ics", ".json")) and f[:-4] + ".ics" not in keep and f[:-5] + ".ics" not in keep: os.remove(os.path.join(cache, f))
+      out["events"].sort(key=lambda x: (x["d"], x["s"]))
+      print(json.dumps(out, ensure_ascii=False))
+    '
+  """ + " ${int(days)} ${sh(urlList)}") every 15m json timeout 60s status
+
+  let data = ev.ok ? ev.out : null
+  let dayKeys = range(days + 1).map(k => fmtTime(now + k * 86400, "yyyy-MM-dd"))
+  let dayLabels = range(len(dayKeys)).map(k => k == 0 ? "today" : k == 1 ? "tomorrow" : lower(fmtTime(now + k * 86400, "EEE d MMM")))
+  // Each calendar's shown name (yours, else the feed's own) and color.
+  let names = range(len(cals)).map(i => cals[i].name != "" ? cals[i].name : get(data.names ?? {}, str(i), "") != "" ? get(data.names, str(i)) : "calendar ${i + 1}")
+  let tints = cals.map(c => get(palette, c.color % len(palette), accent))
+  let upcoming = (data.events ?? []).filter(e => indexOf(dayKeys, e.d) >= 0 && (e.a || e.e > now) && cals[e.c].on)
+    .map(e => {t: e.t, l: e.l, c: e.c, d: e.d, a: e.a, s: e.s, e: e.e, n: e.n,
+      cal: names[e.c], tint: tints[e.c], when: e.a ? "all day" : e.s <= now ? "now" : fmtTime(e.s, "HH:mm")})
+  // Events with a day heading before the first event of each day.
+  let lines = flatten(range(len(upcoming)).map(i =>
+    i == 0 || upcoming[i].d != upcoming[i - 1].d ? [{h: true, d: upcoming[i].d, label: dayLabels[indexOf(dayKeys, upcoming[i].d)]}, upcoming[i]] : [upcoming[i]]))
+  // As many lines as the tile has room for, without a day heading left at the bottom.
+  let tileLines = lines.take(max(2, (rows ?? 4) * 3))
+  let tileFit = len(tileLines) > 0 && last(tileLines).h ? tileLines.take(len(tileLines) - 1) : tileLines
+  let todayCount = count(upcoming, e => e.d == dayKeys[0])
+  let errCount = len(keys(data.errors ?? {}))
+
+  onTap: screen()
+
+  component Dot(tint, sz = 10) {
+    Spacer { width: sz; height: sz; radius: sz / 2; background: tint }
+  }
+
+  component Tab(label, name) {
+    Button { text: label; color: tab == name ? accent : muted; onTap: tab = name }
+  }
+
+  // ---------- tile ----------
+  Column {
+    gap: 3
+    Row {
+      gap: 6
+      align: center
+      Text { text: lower(fmtTime(now, "EEE d")); style: label; color: accent; weight: 1; maxLines: 1 }
+      Text {
+        text: len(cals) == 0 ? "" : ev == null ? "…" : !ev.ok ? "error" : errCount > 0 ? "!" : todayCount == 0 ? "free" : "${todayCount} today"
+        style: small
+        color: ev != null && (!ev.ok || errCount > 0) ? red : muted
+        width: 56
+        align: end
+      }
+    }
+    if len(cals) == 0 {
+      Spacer { weight: 1 }
+      Text { text: "no calendars yet"; style: body; align: center }
+      Text { text: "tap to add one"; style: small; color: muted; align: center }
+      Spacer { weight: 1 }
+    } else if data != null && len(upcoming) == 0 {
+      Spacer { weight: 1 }
+      Text { text: "nothing in the next ${days} days"; style: small; color: muted; align: center }
+      Spacer { weight: 1 }
+    } else {
+      Column {
+        gap: 3
+        weight: 1
+        clip: true
+        for l in tileFit {
+          if l.h {
+            Text { text: l.label; style: label; color: l.d == dayKeys[0] ? foreground : muted; padding: [0, 3, 0, 0]; maxLines: 1 }
+          } else {
+            Row {
+              gap: 6
+              align: center
+              Spacer { width: 3; height: 16; radius: 2; background: l.tint }
+              if (cols ?? 3) >= 3 {
+                Text { text: l.when; style: small; color: l.when == "now" ? accent : muted; width: 58; maxLines: 1 }
+              }
+              Text { text: l.t; style: small; weight: 1; maxLines: 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ---------- full screen ----------
+  screen {
+    title: "calendar"
+    Column {
+      gap: 10
+      padding: 4
+      Row {
+        gap: 8
+        Tab { label: "agenda"; name: "agenda" }
+        Tab { label: "settings"; name: "settings" }
+        Spacer { weight: 1 }
+        Button { text: "refresh"; onTap: refresh() }
+      }
+
+      if tab == "agenda" {
+        Column {
+          gap: 6
+          weight: 1
+          scroll: true
+          if len(cals) == 0 {
+            Text { text: "No calendars yet. Add one in settings."; style: body; color: muted }
+            Button { text: "open settings"; onTap: tab = "settings" }
+          } else if ev != null && !ev.ok {
+            Text { text: "couldn't read the calendars"; style: body; color: red }
+            Text { text: ev.err ?? ""; style: small; color: muted; font: mono; maxLines: 8 }
+          } else if data == null {
+            Text { text: "loading…"; style: body; color: muted }
+          } else if len(upcoming) == 0 {
+            Text { text: "Nothing in the next ${days} days."; style: body; color: muted }
+          }
+          for l in lines {
+            if l.h {
+              Text { text: l.label; style: title; fontSize: 18; color: l.d == dayKeys[0] ? accent : foreground; padding: [0, 10, 0, 0] }
+            } else {
+              Row {
+                gap: 10
+                padding: [10, 8]
+                border: 1
+                borderColor: alpha(l.tint, 0.4)
+                background: alpha(l.tint, l.s <= now && !l.a ? 0.18 : 0.06)
+                Spacer { width: 4; height: 40; radius: 2; background: l.tint }
+                Column {
+                  gap: 1
+                  width: 92
+                  Text { text: l.when; style: body; color: l.when == "now" ? accent : foreground; maxLines: 1 }
+                  Text {
+                    text: l.a ? (l.n > 1 ? "${l.n} days" : "") : "–" + fmtTime(l.e, "HH:mm")
+                    style: small
+                    color: muted
+                    maxLines: 1
+                  }
+                }
+                Column {
+                  gap: 1
+                  weight: 1
+                  Text { text: l.t; style: body; maxLines: 2 }
+                  Text { text: l.l != "" ? "${l.cal} · ${l.l}" : l.cal; style: small; color: muted; maxLines: 1 }
+                }
+              }
+            }
+          }
+        }
+      } else {
+        Column {
+          gap: 10
+          weight: 1
+          scroll: true
+
+          Text { text: "calendars"; style: label; color: accent }
+          if len(cals) == 0 {
+            Text { text: "None yet: add your first one below."; style: small; color: muted }
+          }
+          for c, i in cals {
+            let err = get(data.errors ?? {}, str(i), "")
+            let n = count(upcoming, e => e.c == i)
+            Row {
+              gap: 10
+              align: center
+              padding: [10, 8]
+              border: 1
+              borderColor: alpha(muted, 0.3)
+              // Tap the dot to cycle its color.
+              Box {
+                size: 36
+                align: center
+                onTap: cals = range(len(cals)).map(j => j == i ? {name: c.name, url: c.url, on: c.on, color: (c.color + 1) % len(palette)} : cals[j])
+                Dot { tint: c.on ? tints[i] : alpha(muted, 0.5); sz: 18 }
+              }
+              Column {
+                gap: 1
+                weight: 1
+                Text { text: names[i]; style: body; color: c.on ? foreground : muted; maxLines: 1 }
+                Text {
+                  text: !c.on ? "hidden" : err != "" ? err : data == null ? "…" : "${n} event${n == 1 ? "" : "s"} in ${days} days"
+                  style: small
+                  color: c.on && err != "" ? (startsWith(err, "offline") ? yellow : red) : muted
+                  maxLines: 2
+                }
+              }
+              Button {
+                text: c.on ? "hide" : "show"
+                onTap: { cals = range(len(cals)).map(j => j == i ? {name: c.name, url: c.url, color: c.color, on: !c.on} : cals[j]); refresh() }
+              }
+              Button { text: "✕"; color: red; onTap: { cals = cals.take(i) + cals.drop(i + 1); refresh() } }
+            }
+          }
+
+          Spacer { height: 6 }
+          Text { text: "add a calendar"; style: label; color: accent }
+          Input { text: newName; placeholder: "name (optional)"; onChange: newName = value }
+          Input { text: newUrl; placeholder: "secret address in iCal format"; onChange: { newUrl = trim(value); addErr = "" } }
+          if addErr != "" {
+            Text { text: addErr; style: small; color: red }
+          }
+          Button {
+            text: "add calendar"
+            onTap: {
+              addErr = match(newUrl, "^(https|webcal)://[^'\"`$\\\\\\s]+$") == null ? "Paste a link that starts with https:// (or webcal://), without spaces, quotes or $." : any(cals, c => c.url == newUrl) ? "That calendar is already added." : ""
+              cals = addErr != "" ? cals : cals + [{name: trim(newName), url: newUrl, color: len(cals) % len(palette), on: true}]
+              newName = addErr != "" ? newName : ""
+              newUrl = addErr != "" ? newUrl : ""
+              refresh()
+            }
+          }
+          Text {
+            text: "In Google Calendar on the web: Settings → pick the calendar under \"Settings for my calendars\" → Integrate calendar → copy \"Secret address in iCal format\" (ends in basic.ics). Shared and subscribed calendars have the link too; public ones use \"Public address in iCal format\". Changes on Google can take a few hours to appear in this link."
+            style: small
+            color: muted
+          }
+
+          Spacer { height: 6 }
+          Text { text: "days ahead"; style: label; color: accent }
+          Row {
+            gap: 8
+            for d in [3, 7, 14, 30] {
+              Button { text: "${d}"; color: days == d ? accent : muted; onTap: days = d }
+            }
+          }
+        }
+      }
+    }
+  }
+}

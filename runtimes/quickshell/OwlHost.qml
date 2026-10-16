@@ -33,8 +33,8 @@ QtObject {
   // Where `state ... persist` and `history(...) persist` are kept.
   property string stateDir: (Quickshell.env("XDG_STATE_HOME") || root.home + "/.local/state") + "/owl"
 
-  // The command that answers android.device, android.system and
-  // android.volume as JSON. The bundled owl-source reads them from Linux.
+  // The command that answers android.device, android.system, android.volume
+  // and android.modes as JSON. The bundled owl-source reads them from Linux.
   property string sourceScript: {
     var u = String(Qt.resolvedUrl("owl-source"))
     return u.indexOf("file://") === 0 ? decodeURIComponent(u.slice(7)) : u
@@ -80,6 +80,14 @@ QtObject {
     case "volume": return root.volume(s(0))
     case "launcher":
       return widget.report("launcher(\"" + s(0) + "\") opens the Android launcher's own screens; this shell has none")
+    // No share sheet here: the text goes to the clipboard, which is where it would end up.
+    case "share":
+      Quickshell.execDetached(["wl-copy", "--", s(0)])
+      return Quickshell.execDetached(["notify-send", "--", "copied", s(0)])
+    // No torch and no haptics on a desktop; a widget's button just does nothing.
+    case "torch":
+    case "haptic":
+      return
     case "androidApp":
     case "notification":
       return widget.report(name + "() opens Android apps and notifications, which this shell does not have")

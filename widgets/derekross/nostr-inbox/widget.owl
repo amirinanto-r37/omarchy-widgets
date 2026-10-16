@@ -1,7 +1,7 @@
 widget "nostr" {
   size: 3x3
   minSize: 3x2
-  meta { description: "Your nostr inbox: new zaps, replies, mentions, reactions and reposts. Enter any npub or NIP-05 address; tap for the full list"; version: "1.0"; license: "MIT"; category: "news"; owl: 5 }
+  meta { description: "Your nostr inbox: new zaps, replies, mentions, reactions and reposts. Enter any npub or NIP-05 address; tap for the full list"; version: "1.1"; license: "MIT"; category: "news"; owl: 6 }
   requires { pacman: ["websocat", "jq", "curl"] }
 
   state who = "" persist          // the npub, nprofile, hex key or NIP-05 address entered
@@ -17,7 +17,7 @@ widget "nostr" {
 
   // Finds the user's key and inbox relays (NIP-65), then the last week's zaps, notes, reactions
   // and reposts that tag them, with the names of who sent them. Reads only public data; no keys needed.
-  source inbox = cmd('id=' + (valid ? id : "") + ';' + '
+  source inbox = cmd('id=' + sh(valid ? id : "") + ';' + '
 # Prints the nostr inbox of $id (npub, nprofile, hex or NIP-05) as one line of JSON.
 [ -z "$id" ] && { echo null; exit 0; }
 umask 077
@@ -51,7 +51,7 @@ case $id in
     if command -v nak > /dev/null; then
       pk=$(cat "$c/id-$id" 2>/dev/null) && hex "$pk" || { pk=$(nak decode "$id" < /dev/null 2>/dev/null | jq -rR "fromjson? // . | if type == \"object\" then .pubkey else . end"); hex "$pk" && printf %s "$pk" > "$c/id-$id"; }
     else
-      pk=$(printf %s "$id" | jq -Rr --arg cs qpzry9x8gf2tvdw0s3jn54khce6mua7l -f <(cat <<"JQ"
+      pk=$(printf %s "$id" | jq -Rr --arg cs qpzry9x8gf2tvdw0s3jn54khce6mua7l \'
       def hex: . as $n | "0123456789abcdef" as $h | $h[($n / 16 | floor):($n / 16 | floor) + 1] + $h[($n % 16):($n % 16) + 1];
       (if startswith("nprofile") then 2 else 0 end) as $skip
       | split("1") | last | .[0:-6] | split("")
@@ -59,8 +59,8 @@ case $id in
       | map([range(4; -1; -1) as $i | (. / pow(2; $i) | floor) % 2]) | flatten
       | . as $b | [range(0; length / 8 | floor) | $b[. * 8:. * 8 + 8] | reduce .[] as $x (0; . * 2 + $x)]
       | .[$skip:$skip + 32] | map(hex) | join("")
-JQ
-      ))
+\'
+      )
     fi ;;
   *.*)
     # NIP-05, remembered so a failed lookup does not lose the account.
@@ -127,7 +127,7 @@ if command -v nak > /dev/null && [ -s "$c/$pk.$mid.cipher" ]; then
   [ -s $k/relays ] || echo wss://relay.nip46.com wss://bucket.coracle.social wss://nrs.primal.net > $k/relays
   connect="nostrconnect://$(cat $k/client.pub)?$(for r in $(cat $k/relays); do printf "relay=%s&" $(printf %s $r | jq -Rr @uri); done)secret=$(cat $k/connect.secret)&perms=nip44_decrypt%2Cnip04_decrypt&name=nostr%20inbox"
 fi
-jq -c --arg pk "$pk" --slurpfile priv "$pf" --slurpfile ml <(cat $c/$pk.mutelist.json 2>/dev/null || echo null) --arg mid "$mid" --arg nak "$(command -v nak)" --arg bunker "$([ -s $k/bunker ] && echo yes)" --arg connect "$connect" -f <(cat <<"JQ"
+jq -c --arg pk "$pk" --slurpfile priv "$pf" --slurpfile ml <(cat $c/$pk.mutelist.json 2>/dev/null || echo null) --arg mid "$mid" --arg nak "$(command -v nak)" --arg bunker "$([ -s $k/bunker ] && echo yes)" --arg connect "$connect" \'
   def tag($k): [.tags[]? | select(type == "array" and .[0] == $k) | .[1] | strings];
   def sats(b): (b // "" | capture("^lnbc(?<n>[0-9]+)(?<m>[munp]?)1")? // null) as $c
     | if $c == null then null else ($c.n | tonumber) * ({"m": 100000, "u": 100, "n": 0.1, "p": 0.0001, "": 100000000}[$c.m]) | floor end;
@@ -151,8 +151,7 @@ jq -c --arg pk "$pk" --slurpfile priv "$pf" --slurpfile ml <(cat $c/$pk.mutelist
   | {mutes: {id: (if $mid == "" then null else $mid end), private: (if (($list.content | strings) // "") == "" then null elif $pt == null then -1 else ($pt | length) end),
       nip04: ((($list.content | strings) // "") | contains("?iv=")), nak: ($nak != ""), bunker: ($bunker == "yes"), connect: (if $connect == "" then null else $connect end)},
     items: (group_by(.type) | map(sort_by(-.at) | .[0:100]) | add // [] | sort_by(-.at))}
-JQ
-) $t/ev.json > $t/items.json
+\' $t/ev.json > $t/items.json
 
 # NIP-21 links (nostr:nevent1…) so taps open in the phone nostr app; njump.me if nak is missing.
 if command -v nak > /dev/null; then jq -c --arg pk "$pk" ".items[] | {id: .ref, pubkey: (if .type == \"reply\" or .type == \"mention\" then .who else \$pk end)}" $t/items.json | nak encode nevent 2> /dev/null | jq -Rsc "split(\"\n\") | map(select(. != \"\"))" > $t/nev.json; fi
@@ -161,12 +160,11 @@ if command -v nak > /dev/null; then jq -c --arg pk "$pk" ".items[] | {id: .ref, 
 # Names of the people in it.
 f=$(jq -r ".items | map(.who) | unique | .[0:200] | . as \$a | [range(0; length; 20) | {kinds: [0], authors: \$a[.:. + 20], limit: 100} | tojson] | join(\",\")" $t/items.json)
 if [ -n "$f" ]; then qa "$f" 5 wss://purplepag.es wss://relay.ditto.pub wss://relay.primal.net wss://nos.lol > $t/names.json; else echo "[]" > $t/names.json; fi
-jq -nc --arg pk "$pk" --argjson me "$me" --slurpfile items $t/items.json --slurpfile ps $t/names.json --slurpfile nev $t/nev.json -f <(cat <<"JQ"
+jq -nc --arg pk "$pk" --argjson me "$me" --slurpfile items $t/items.json --slurpfile ps $t/names.json --slurpfile nev $t/nev.json \'
   ($ps[0] | group_by(.pubkey) | map(max_by(.created_at) | {key: .pubkey, value: (.content | strings | fromjson? | objects | [.display_name, .name] | map(strings | select(. != "")) | first)}) | from_entries) as $names
   | {pk: $pk, name: $me.name, relays: $me.relays, at: now | floor, mutes: $items[0].mutes,
      items: ($items[0].items | (length == ($nev[0] | length)) as $ok | to_entries | map(.value + {name: ($names[.value.who] // ("…" + .value.who[-8:])), nevent: (if $ok then $nev[0][.key] else null end)}))}
-JQ
-)
+\'
 ') every 5m json timeout 60s status
 
   // The last good result stays up while a refresh fails (offline, relays timing out).
@@ -189,16 +187,14 @@ JQ
   }
   // Files for this version of the mute list. Its id comes from relays, so it must be hex before it goes near a command.
   let mid = match(data.mutes.id ?? "", "^[0-9a-f]{64}$") != null ? data.mutes.id : null
-  let muteFile = "~/.cache/nostr-inbox/${data.pk}.${mid}.mutes.json"
-  let cipherFile = "~/.cache/nostr-inbox/${data.pk}.${mid}.cipher"
-  // Decrypts the mute list through the saved NIP-46 connection; the ciphertext is read from a file.
-  let decryptCmd = 'umask 077; k=~/.config/nostr-inbox; NOSTR_CLIENT_KEY=$(cat $k/client.key) timeout 120 nak decrypt --sec "$(cat $k/bunker)" -p ' + data.pk + (data.mutes.nip04 ? ' --nip04' : '') + ' "$(cat ' + cipherFile + ')" > ' + muteFile + '.tmp && jq -e "type == \"array\"" ' + muteFile + '.tmp > /dev/null && mv ' + muteFile + '.tmp ' + muteFile + '; rm -f ' + muteFile + '.tmp'
+  let muteName = "${data.pk}.${mid}.mutes.json"
+  let cipherName = "${data.pk}.${mid}.cipher"
   // Zaps newer than the last notification (stored, so old zaps never notify again).
   state notifiedAt = 0 persist
   let newZaps = items.filter(i => i.type == "zap" && i.at > notifiedAt)
 
   // Private mutes: when the list is still encrypted and Amber is paired, ask Amber to decrypt it (NIP-46).
-  when mid != null && data.mutes.private == -1 && data.mutes.bunker { run(decryptCmd) }
+  when mid != null && data.mutes.private == -1 && data.mutes.bunker { run('umask 077; k=~/.config/nostr-inbox; m=~/.cache/nostr-inbox/' + sh(muteName) + '; c=~/.cache/nostr-inbox/' + sh(cipherName) + '; NOSTR_CLIENT_KEY=$(cat $k/client.key) timeout 120 nak decrypt --sec "$(cat $k/bunker)" -p ' + sh(data.pk) + (data.mutes.nip04 ? ' --nip04' : '') + ' "$(cat "$c")" > "$m".tmp && jq -e "type == \"array\"" "$m".tmp > /dev/null && mv "$m".tmp "$m"; rm -f "$m".tmp') }
 
   when notifiedAt == 0 && data != null { notifiedAt = now }
   when alerts && notifiedAt > 0 && len(newZaps) > 0 {
@@ -337,7 +333,7 @@ JQ
             align: center
             if data.mutes.bunker {
               Text { text: "Amber connected"; style: small; color: muted; weight: 1 }
-              Button { text: "disconnect"; color: muted; onTap: run('rm -f ~/.config/nostr-inbox/bunker ~/.config/nostr-inbox/connect.secret ' + muteFile) }
+              Button { text: "disconnect"; color: muted; onTap: run('rm -f ~/.config/nostr-inbox/bunker ~/.config/nostr-inbox/connect.secret ~/.cache/nostr-inbox/' + sh(muteName)) }
             } else {
         // Listens for Amber's answer to the nostrconnect:// link (it must echo our secret), saves the
         // connection, then decrypts right away. Opens the link in Amber at the same time.
@@ -345,13 +341,13 @@ JQ
           text: "connect Amber"
           onTap: {
             amberAt = now
-            run('k=~/.config/nostr-inbox; ck=$(cat $k/client.key); relays=$(cat $k/relays); ev=$(timeout 280 nak req -k 24133 -p $(nak key public $ck) --since $(($(date +%s) - 5)) -l 1 --stream $relays 2>/dev/null); from=$(printf %s "$ev" | jq -r .pubkey); [[ $from =~ ^[0-9a-f]{64}$ ]] || from=0; res=$(nak decrypt --sec $ck -p $from "$(printf %s "$ev" | jq -r .content)" 2>/dev/null | jq -r .result); [ -n "$res" ] && [ "$res" = "$(cat $k/connect.secret)" ] && (umask 077; printf %s "bunker://$from?$(for r in $relays; do printf "relay=%s&" $(printf %s $r | jq -Rr @uri); done)" > $k/bunker) && rm -f $k/connect.secret; [ -s $k/bunker ] && ' + decryptCmd)
+            run('k=~/.config/nostr-inbox; ck=$(cat $k/client.key); relays=$(cat $k/relays); ev=$(timeout 280 nak req -k 24133 -p $(nak key public $ck) --since $(($(date +%s) - 5)) -l 1 --stream $relays 2>/dev/null); from=$(printf %s "$ev" | jq -r .pubkey); [[ $from =~ ^[0-9a-f]{64}$ ]] || from=0; res=$(nak decrypt --sec $ck -p $from "$(printf %s "$ev" | jq -r .content)" 2>/dev/null | jq -r .result); [ -n "$res" ] && [ "$res" = "$(cat $k/connect.secret)" ] && (umask 077; printf %s "bunker://$from?$(for r in $relays; do printf "relay=%s&" $(printf %s $r | jq -Rr @uri); done)" > $k/bunker) && rm -f $k/connect.secret; [ -s $k/bunker ] && ' + 'umask 077; k=~/.config/nostr-inbox; m=~/.cache/nostr-inbox/' + sh(muteName) + '; c=~/.cache/nostr-inbox/' + sh(cipherName) + '; NOSTR_CLIENT_KEY=$(cat $k/client.key) timeout 120 nak decrypt --sec "$(cat $k/bunker)" -p ' + sh(data.pk) + (data.mutes.nip04 ? ' --nip04' : '') + ' "$(cat "$c")" > "$m".tmp && jq -e "type == \"array\"" "$m".tmp > /dev/null && mv "$m".tmp "$m"; rm -f "$m".tmp')
             url(data.mutes.connect)
           }
         }
         // If Android stopped the listener while Amber was open: Amber signs as the user, so pair with their key.
         if amberAt > 0 {
-          Button { text: "done in Amber"; color: muted; onTap: run('k=~/.config/nostr-inbox; [ -s $k/bunker ] || (umask 077; printf %s "bunker://' + data.pk + '?$(for r in $(cat $k/relays); do printf "relay=%s&" $(printf %s $r | jq -Rr @uri); done)" > $k/bunker); ' + decryptCmd) }
+          Button { text: "done in Amber"; color: muted; onTap: run('k=~/.config/nostr-inbox; [ -s $k/bunker ] || (umask 077; printf %s "bunker://"' + sh(data.pk) + '"?$(for r in $(cat $k/relays); do printf "relay=%s&" $(printf %s $r | jq -Rr @uri); done)" > $k/bunker); ' + 'umask 077; k=~/.config/nostr-inbox; m=~/.cache/nostr-inbox/' + sh(muteName) + '; c=~/.cache/nostr-inbox/' + sh(cipherName) + '; NOSTR_CLIENT_KEY=$(cat $k/client.key) timeout 120 nak decrypt --sec "$(cat $k/bunker)" -p ' + sh(data.pk) + (data.mutes.nip04 ? ' --nip04' : '') + ' "$(cat "$c")" > "$m".tmp && jq -e "type == \"array\"" "$m".tmp > /dev/null && mv "$m".tmp "$m"; rm -f "$m".tmp') }
         }
             }
           }

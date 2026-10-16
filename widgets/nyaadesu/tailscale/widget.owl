@@ -1,0 +1,210 @@
+widget "tailscale" {
+  size: 3x3
+  minSize: 2x2
+  meta { owl: 6; description: "Whether this phone's Tailscale VPN is on, its exit node and public IP (ipinfo.io), and your tailnet's devices via the Tailscale API. Approve exit nodes from the device list"; version: "1.0"; license: "MIT"; category: "system" }
+
+  requires { pacman: ["iproute2", "iputils", "gawk", "curl"] }
+
+  // An API access key from login.tailscale.com/admin/settings/keys, typed on the screen
+  // (or `owl-send <this file> set apiKey tskey-api-...`). Kept by the launcher, not in this file.
+  state apiKey = "" persist
+  state draft = ""
+  state keyMsg = ""   // why the last key typed wasn't saved
+  state myId = "" persist   // the device marked as this phone, for phones where ip can't read the interfaces
+  state busy = ""   // the device whose exit node routes are being changed, or "failed"
+
+  // Only a well-formed key reaches the API and the shell commands, even one set with owl-send.
+  let key = match(apiKey, "^tskey-[A-Za-z0-9_-]+$") != null ? apiKey : ""
+  source api = http("https://api.tailscale.com/api/v2/tailnet/-/devices?fields=all", {Authorization: "Bearer ${key}"}) every 1m timeout 15s json status
+  // The Android app's VPN shows up here as an interface with a 100.64.0.0/10 address. Some phones don't let apps
+  // read the interfaces (ip fails with "Cannot bind netlink socket"); then this says "unavailable".
+  source local = cmd('if a=$(ip -br -4 addr 2>/dev/null); then echo "$a" | awk \'{split($3, a, "/"); split(a[1], o, "."); if (o[1] == 100 && o[2] >= 64 && o[2] < 128) {print a[1]; exit}}\'; else echo unavailable; fi') every 10s
+  // The phone's exit node choice isn't in the API, but traffic through one has it as its first hop, at its 100.x address.
+  source hop = cmd('tracepath -n -m 1 1.1.1.1 2>/dev/null | awk \'$1 == "1:" {print $2; exit}\'') every 20s
+  // Where the phone's traffic reaches the internet (through the exit node when one is used).
+  source pub = http("https://ipinfo.io/json") every 5m timeout 10s json
+
+  let hasKey = key != ""
+  // What was typed or pasted, with any spaces and line breaks taken out.
+  let clean = join(words(draft), "")
+  let draftError = clean == "" ? "Paste a key first."
+    : startsWith(clean, "tskey-auth-") ? "That's an auth key, which adds devices. This needs an API access token: on the keys page, use \"Generate access token\"."
+    : startsWith(clean, "tskey-client-") ? "That's an OAuth client secret. This needs an API access token: on the keys page, use \"Generate access token\"."
+    : match(clean, "^tskey-api-[A-Za-z0-9_-]+$") == null ? "That doesn't look like an API access token; those start with tskey-api-."
+    : ""
+  let rejected = hasKey && (api.code == 401 || api.code == 403)
+  let apiSays = api.out.message ?? ""
+  let devices = (api.ok ? api.out.devices : null) ?? []
+  let ipOk = local != null && local != "unavailable"
+  // Without ip, the device marked as this phone tells whether it's connected, from the API (up to a minute late).
+  let myDev = myId == "" ? null : devices.find(d => d.id == myId)
+  let vpnOn = ipOk ? local != "" : myDev != null && myDev.connectedToControl == true
+  let myIp = ipOk ? local : myDev == null ? "" : (myDev.addresses ?? []).find(a => contains(a, ".")) ?? ""
+  let needPick = local == "unavailable" && myDev == null && api.ok == true
+  let exitRoutes = ["0.0.0.0/0", "::/0"]
+  let rows = devices.map(d => {
+    id: d.id,
+    name: split(d.name ?? d.hostname, ".")[0],
+    ip: (d.addresses ?? []).find(a => contains(a, ".")) ?? "",
+    os: d.os ?? "?",
+    on: d.connectedToControl,
+    seen: d.lastSeen == null ? "" : replace(sub(d.lastSeen, 0, 16), "T", " ") + " UTC",
+    update: d.updateAvailable,
+    phone: d.id == myId || (ipOk && local != "" && contains(d.addresses ?? [], local)),
+    // An exit node advertises the default routes; the admin (this API) enables them.
+    offersExit: contains(d.advertisedRoutes ?? [], "0.0.0.0/0"),
+    exitOn: contains(d.enabledRoutes ?? [], "0.0.0.0/0"),
+    // The enabled routes with the exit routes added or removed, as JSON for the routes endpoint.
+    withExit: "{\"routes\":[" + join(unique((d.enabledRoutes ?? []) + exitRoutes).map(r => "\"${r}\""), ",") + "]}",
+    withoutExit: "{\"routes\":[" + join((d.enabledRoutes ?? []).filter(r => !contains(exitRoutes, r)).map(r => "\"${r}\""), ",") + "]}",
+    routesUrl: "https://api.tailscale.com/api/v2/device/" + d.id + "/routes"
+  })
+  let sorted = rows.sortBy(d => (d.phone ? "0" : d.on ? "1" : "2") + lower(d.name))
+  let exits = rows.filter(d => d.offersExit)
+  let online = devices.count(d => d.connectedToControl)
+  // Only a tailnet device that offers to be an exit node counts as one: mobile carriers use 100.64.0.0/10 addresses too.
+  let exitDev = hop == null || hop == "" ? null : rows.find(d => d.offersExit && d.ip == hop)
+  let exitIp = exitDev == null ? "" : hop
+  let exitLabel = hop == null || api == null ? "…" : !api.ok ? "?" : exitDev == null ? "none" : exitDev.name
+  let place = pub.ip == null ? "" : "${pub.ip}  ·  ${pub.city ?? "?"}, ${pub.country ?? "?"}"
+  // Look up the public IP again as soon as the exit node changes.
+  on exitIp { refresh() }
+
+  let problem = !hasKey ? "add an API key" : api == null ? null : rejected ? "API key rejected" : !api.ok ? "can't reach the API (${api.code})" : null
+
+  onTap: screen()
+
+  component Dot(on) {
+    Spacer { size: 8; radius: 4; background: on ? green : alpha(muted, 0.5) }
+  }
+
+  Column {
+    gap: 6
+    fill: true
+    Row {
+      align: center
+      Text { text: "tailscale"; style: muted; weight: 1 }
+      Dot { on: vpnOn }
+    }
+    Text { text: vpnOn ? "connected" : needPick ? "which?" : "off"; style: title; color: vpnOn ? green : muted }
+    Text { text: vpnOn ? myIp : needPick ? "tap: mark this phone" : "VPN not running"; style: small; font: mono; color: vpnOn ? foreground : muted }
+    if vpnOn {
+      Text { text: "exit: ${exitLabel}"; style: small; color: exitIp != "" ? accent : muted; maxLines: 1 }
+    }
+    Text { text: pub.city == null ? "" : "via ${pub.city}, ${pub.country}"; style: small; color: muted; maxLines: 1; visible: pub.city != null }
+    Spacer { weight: 1 }
+    if problem != null {
+      Text { text: problem; style: small; color: hasKey ? red : yellow; maxLines: 2 }
+    } else {
+      Text { text: "${api == null ? "…" : online}/${api == null ? "…" : len(devices)} devices online"; style: small }
+    }
+    Button { text: vpnOn || needPick ? "open app" : "turn on"; color: vpnOn || needPick ? muted : accent; onTap: androidApp("com.tailscale.ipn") }
+  }
+
+  screen {
+    title: "tailscale"
+    Column {
+      gap: 10
+      fill: true
+      Row {
+        align: center
+        gap: 10
+        Dot { on: vpnOn }
+        Column {
+          gap: 0
+          weight: 1
+          Text { text: vpnOn ? "this phone is connected" : needPick ? "which device is this phone?" : "this phone's VPN is off"; style: body; bold: true }
+          Text { text: vpnOn ? myIp : needPick ? "This phone can't read its network interfaces. Tap \"mine\" on its entry below." : "turn it on in the Tailscale app"; style: small; font: mono; color: muted }
+        }
+        Button { text: "open app"; onTap: androidApp("com.tailscale.ipn") }
+      }
+      Column {
+        gap: 4
+        Row {
+          Text { text: "exit node"; style: small; color: muted; width: 90 }
+          Text { text: !vpnOn && !needPick ? "—" : exitIp == "" ? exitLabel : exitDev == null ? exitIp : "${exitDev.name}  (${exitIp})"; style: small; font: mono; color: exitIp != "" ? accent : foreground; maxLines: 1; weight: 1 }
+        }
+        Row {
+          Text { text: "public IP"; style: small; color: muted; width: 90 }
+          Text { text: place != "" ? place : "…"; style: small; font: mono; maxLines: 1; weight: 1 }
+        }
+        Row {
+          Text { text: "network"; style: small; color: muted; width: 90 }
+          Text { text: pub.org ?? "…"; style: small; font: mono; maxLines: 1; weight: 1 }
+        }
+      }
+      Spacer { height: 1; fill: width; background: alpha(muted, 0.25) }
+
+      if !hasKey || rejected {
+        if rejected {
+          Text { text: "Tailscale rejected the saved key (…${sub(key, len(key) - 4, len(key))}): ${apiSays != "" ? apiSays : "error ${api.code}"}. API access tokens expire (90 days by default). Paste a new one:"; style: small; color: red }
+        } else {
+          Text { text: "To list your tailnet's devices, generate an API access token (not an auth key) at login.tailscale.com/admin/settings/keys and paste it here:"; style: small }
+        }
+        Input { placeholder: "tskey-api-..."; focus: !hasKey; onChange: { draft = value; keyMsg = "" }; onSubmit: { keyMsg = draftError; apiKey = draftError == "" ? clean : apiKey; refresh() } }
+        if keyMsg != "" {
+          Text { text: keyMsg; style: small; color: yellow }
+        }
+        Row {
+          gap: 8
+          Button { text: "save key"; onTap: { keyMsg = draftError; apiKey = draftError == "" ? clean : apiKey; refresh() } }
+          Button { text: "create key"; color: muted; onTap: url("https://login.tailscale.com/admin/settings/keys") }
+        }
+      } else {
+        Row {
+          align: center
+          Text { text: problem ?? "${online} of ${len(devices)} devices online"; style: muted; color: problem == null ? muted : red; weight: 1 }
+          Button { text: "refresh"; color: muted; onTap: refresh() }
+        }
+        Column {
+          gap: 6
+          weight: 1
+          scroll: true
+          for d in sorted key d.id {
+            Column {
+              gap: 6
+              padding: [10, 8]
+              border: 1
+              borderColor: d.phone ? alpha(accent, 0.6) : alpha(muted, 0.3)
+              Row {
+                align: center
+                gap: 10
+                onTap: copy(d.ip)
+                Dot { on: d.on }
+                Column {
+                  gap: 0
+                  weight: 1
+                  Text { text: d.name + (d.phone ? "  (this phone)" : d.ip == exitIp ? "  (exit node in use)" : ""); style: body; bold: true; maxLines: 1 }
+                  Text { text: "${d.ip}  ·  ${d.os}${d.update ? "  ·  update" : ""}"; style: small; font: mono; color: muted; maxLines: 1 }
+                }
+                Text { text: d.on ? "online" : d.seen; style: small; color: d.on ? green : muted; width: 110; align: end; maxLines: 2 }
+                if !ipOk && (myDev == null || d.id == myId) {
+                  Button { text: d.id == myId ? "not mine" : "mine"; color: muted; onTap: myId = d.id == myId ? "" : d.id }
+                }
+              }
+              if d.offersExit {
+                Row {
+                  align: center
+                  gap: 8
+                  Text { text: busy == d.id ? "exit node: saving…" : d.exitOn ? "exit node: allowed" : "exit node: offered, not approved"; style: small; color: d.exitOn ? accent : yellow; weight: 1 }
+                  if d.exitOn {
+                    Button { text: "disable"; color: muted; onTap: { busy = d.id; busy = run("printf 'Authorization: Bearer %s' ${sh(key)} | curl -sf -X POST -H @- -H 'Content-Type: application/json' -d ${sh(d.withoutExit)} ${sh(d.routesUrl)} >/dev/null || echo failed") } }
+                  } else {
+                    Button { text: "approve"; onTap: { busy = d.id; busy = run("printf 'Authorization: Bearer %s' ${sh(key)} | curl -sf -X POST -H @- -H 'Content-Type: application/json' -d ${sh(d.withExit)} ${sh(d.routesUrl)} >/dev/null || echo failed") } }
+                  }
+                }
+              }
+            }
+          }
+        }
+        Text { text: "Couldn't change the exit node: the API key may lack write access to devices."; style: small; color: red; visible: busy == "failed" }
+        Text { text: "Pick the exit node this phone uses in the Tailscale app; here you approve which devices may serve as one."; style: small; color: muted; visible: len(exits) > 0 }
+        Row {
+          gap: 8
+          Text { text: "tap a device to copy its IP"; style: small; color: muted; weight: 1 }
+          Button { text: "forget key"; color: red; onTap: apiKey = "" }
+        }
+      }
+    }
+  }
+}

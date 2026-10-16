@@ -4,7 +4,7 @@ widget "eredivisie" {
     description: "Eredivisie matches by matchday and the table from ESPN, with club logos: live scores, every matchday of the season and the table as it stood after each"
     version: "1.2"
     license: "MIT"
-    category: "world"
+    category: "sport"
   }
   requires { pacman: ["curl", "jq", "coreutils", "findutils"] }
   page: 1

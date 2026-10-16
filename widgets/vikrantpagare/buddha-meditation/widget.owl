@@ -1,0 +1,183 @@
+widget "buddha-meditation" {
+  size: 4x4
+  minSize: 2x2
+  padding: 0
+  background: "#050810"
+  meta { owl: 6; description: "A serene pixel-art Buddha meditating on a lotus by a moonlit lake, with drifting stars and gently rippling water"; version: "1.0"; license: "MIT"; category: "fun" }
+
+  let buddha = [
+    "..................hhhh..................",
+    ".................hhhhhh.................",
+    "................hhhhhhhh................",
+    "...............hhhhhhhhhh...............",
+    "..............hhhhhhhhhhhh..............",
+    ".............hhhhhhhhhhhhhh.............",
+    "............hhhhhhhhhhhhhhhh............",
+    "...........hSSSSSSSSSSSSSSSSh...........",
+    "...........hSSSSSSSSSSSSSSSSh...........",
+    "...........hSSSSSSSSSSSSSSSSh...........",
+    "...........hSSSSSSSSSSSSSSSSh...........",
+    "...........hSSSSSSSSSSSSSSSSh...........",
+    "...........hSeeeeeSSSSeeeeeSh...........",
+    "...........hSSSSSSSSSSSSSSSSh...........",
+    "...........hSSSSSSSssSSSSSSSh...........",
+    "...........hSSSSSkSSSSSkSSSSh...........",
+    "...........hSSSSSSSkkkSSSSSSh...........",
+    "............hSSSSSSSSSSSSSSh............",
+    "..............ssssssssssss..............",
+    "..............ssssssssssss..............",
+    ".........RRRRRRRRRRRRRRRRRRRRRR.........",
+    "........RRRRRRRRRRRRRRRRRRRRRRRR........",
+    ".......RRRRRRRRRRRRRRRRRRRRRRRRRR.......",
+    "......RRRRRrRRRRRRRRRRRRRRRRrRRRRR......",
+    "......RRRRRrRRRRRRRRRRRRRRRRrRRRRR......",
+    ".....RRRRRRrrRRRRRRRRRRRRRRrrRRRRRR.....",
+    ".....RRRRRRrrRRRRRRRRRRRRRRrrRRRRRR.....",
+    ".....RRRRRRrrRRRRSSSSSSRRRRrrRRRRRR.....",
+    ".....RRRRRRrrRRRSSSssSSSRRRrrRRRRRR.....",
+    ".....RRRRRRrrRRRSSSssSSSRRRrrRRRRRR.....",
+    "......RRRRRrrRRRRSSSSSSRRRRrrRRRRR......",
+    ".......RRRRrrRRRRRRRRRRRRRRrrRRRR.......",
+    "........RRRRRrrRRRRRRRRRRrrRRRRR........",
+    ".........RRRRRRrRRRRRRRRrRRRRRR.........",
+    "...........RRRRRRRRRRRRRRRRRR...........",
+    ".............RRRRRRRRRRRRRR.............",
+  ]
+
+  Canvas {
+    // ---- responsive scaling: px adapts to the tile's shape ----
+    let px = max(2, floor(min(width * 0.86 / 40, height * 0.62 / 36)))
+    let cx = floor(width / 2)
+    let cx2 = cx - (cx % px) + (cx % px * 2 > px ? px : 0)
+    let bx = cx2 - 20 * px
+    let waterH = max(height * 0.18, 6 * px)
+    let wl = height - waterH
+    let base = wl + 2 * px
+    let by = base - 39 * px
+    let ngx = floor(width / px) + 1
+    let ngy = max(2, floor(by / px))
+
+    // ---- sky ----
+    rect(0, -1, width, wl + 2, fill: linear(0, 0, 0, wl, ["#050810", "#0d142c", "#1b2750"]))
+
+    // ---- distant mountains along the horizon ----
+    for x in range(0, ngx + 1, 2) {
+      let mh = (1.0 + sin(x * 0.15) * 0.55 + sin(x * 0.06 + 1.7) * 0.35) * 6 * px
+      rect(x * px, wl - mh, 2 * px, mh + 1, fill: "#0f1c3a")
+    }
+    for x in range(0, ngx + 1, 2) {
+      let mh = (0.6 + sin(x * 0.23 + 2.4) * 0.5 + sin(x * 0.09 + 0.6) * 0.3) * 4 * px
+      rect(x * px, wl - mh, 2 * px, mh + 1, fill: "#0a1530")
+    }
+
+    // ---- stars: scattered (hashed), very slow drift + soft twinkle ----
+    for i in range(38) {
+      let h1 = sin(i * 12.9898 + 4.1414) * 43758.5453
+      let h2 = sin(i * 78.2330 + 1.2345) * 12543.1237
+      let r1 = h1 - floor(h1)
+      let r2 = h2 - floor(h2)
+      let spd = 0.012 + (r1 + r2) * 0.022
+      let sx = (floor(r1 * ngx) + floor(time * spd)) % ngx
+      let sy = floor(r2 * ngy)
+      let tw = 0.5 + 0.5 * sin(time * 0.7 + i * 1.7)
+      rect(sx * px, sy * px, px, px, fill: alpha("#fbf6da", tw))
+    }
+
+    // ---- moon ----
+    let mx = bx + 28 * px
+    let my = max(6 * px, by - 12 * px)
+    for g in range(2) {
+      circle(mx, my, (5 + g * 4) * px, fill: alpha("#f5e6a3", 0.06))
+    }
+    for dy in range(-4, 5) {
+      for dx in range(-4, 5) {
+        if dx * dx + dy * dy <= 11 {
+          rect(mx + dx * px, my + dy * px, px, px, fill: "#f5e6a3")
+        }
+      }
+    }
+
+    // ---- golden halo: soft glow, pixel ring, rays ----
+    let hx = cx2
+    let hy = by + 9 * px
+    for g in range(2) {
+      circle(hx, hy, (11 + g * 3) * px, fill: alpha("#f2c94c", 0.04))
+    }
+    for a in range(120) {
+      let ang = a * 3.14159265 / 60
+      rect(hx + round(cos(ang) * 13) * px, hy + round(sin(ang) * 13) * px, px, px, fill: alpha("#ffd76e", 0.8))
+    }
+    for a in range(12) {
+      let ang = a * 3.14159265 / 6
+      for rr in range(14, 18) {
+        let rx = 20 + round(cos(ang) * rr)
+        let ry = 9 + round(sin(ang) * rr)
+        rect(bx + rx * px, by + ry * px, px, px, fill: alpha("#ffd76e", rr < 16 ? 0.6 : 0.28))
+      }
+    }
+
+    // ---- lake ----
+    rect(0, wl, width, height - wl + 1, fill: linear(0, wl, 0, height, ["#0a1730", "#13315f", "#1d4c8c"]))
+
+    // moon shimmer on the water
+    for yy in range(0, 9) {
+      let ry = wl + (2 + yy * 2) * px
+      let w = (2 + (yy % 3)) * px
+      let wob = round(sin(time * 0.8 + yy * 0.9) * px)
+      rect(mx - w + wob, ry, w * 2, px, fill: alpha("#f5e6a3", 0.12 - yy * 0.01))
+    }
+
+    // reflection
+    layer(0.3) {
+      scale(1, -1, cx2, wl) {
+        sprite(buddha, bx, by, px, palette: {
+          h: "#101f3a", S: "#2b5a93", s: "#224d80", e: "#0e223d",
+          k: "#0e223d", R: "#1e4478", r: "#153058",
+        })
+      }
+    }
+
+    // ---- slow waves ----
+    for wave in range(3) {
+      for x in range(0, ngx) {
+        let s = sin(x * 0.45 + time * 0.6 + wave * 2.1)
+        if s > 0.3 {
+          let bob = sin(time * 0.5 + wave) * 0.4
+          let yy = wl + floor(1 + wave * 1.6 + s * 1.7 + bob) * px
+          if yy < height - px {
+            rect(x * px, yy, px, px, fill: s > 0.8 ? "#b6dcf7" : "#5b8fd0")
+          }
+        }
+      }
+    }
+
+    // ---- buddha ----
+    sprite(buddha, bx, by, px, palette: {
+      h: "#3a2a1e", S: "#e8b87a", s: "#c8945a", e: "#3a2410",
+      k: "#3a2410", R: "#d9822b", r: "#a85a18",
+    })
+
+    // ---- lotus pedestal: petals fan at the surface, cradling the base ----
+    let petals = [
+      [9, "#f2a3c4"],
+      [13, "#e2679a"],
+      [16, "#d94f88"],
+      [12, "#b84471"],
+      [7, "#93355c"],
+    ]
+    for i in range(5) {
+      let half = petals[i][0]
+      let c = petals[i][1]
+      for dx in range(-half, half + 1) {
+        rect(hx + dx * px, wl - 2 * px + i * px, px, px, fill: c)
+      }
+    }
+    for i in range(2) {
+      let off = (12 + i) * px
+      rect(hx - off, wl - 4 * px, px, px, fill: "#f2a3c4")
+      rect(hx + off, wl - 4 * px, px, px, fill: "#f2a3c4")
+      rect(hx - off, wl - 5 * px, px, px, fill: "#e2679a")
+      rect(hx + off, wl - 5 * px, px, px, fill: "#e2679a")
+    }
+  }
+}

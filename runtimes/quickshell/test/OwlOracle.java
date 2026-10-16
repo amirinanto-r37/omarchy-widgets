@@ -47,6 +47,12 @@ public class OwlOracle {
         Global.Sampled s = (Global.Sampled) g;
         Value one = s.getOf().invoke(root);
         v = s.getPrev() ? Null.INSTANCE : new Lst(Collections.singletonList(one));
+      } else if (g instanceof Global.Asset) {
+        // Owl.js turns an embedded image into a data URL. Match that, or the
+        // first widget with an asset fails the runtime comparison.
+        byte[] bytes = ((Global.Asset) g).getBytes();
+        String b64 = Base64.getEncoder().encodeToString(bytes);
+        v = Json.INSTANCE.parse(quote("data:" + assetMime(b64) + ";base64," + b64));
       } else {
         v = Null.INSTANCE;
       }
@@ -63,6 +69,15 @@ public class OwlOracle {
     public void act(String name, List<? extends Value> args) {}
     public void report(String message) { System.err.println("report: " + message); }
   };
+
+  static String assetMime(String b64) {
+    if (b64.startsWith("iVBOR")) return "image/png";
+    if (b64.startsWith("/9j/")) return "image/jpeg";
+    if (b64.startsWith("R0lG")) return "image/gif";
+    if (b64.startsWith("UklGR")) return "image/webp";
+    if (b64.startsWith("PHN2") || b64.startsWith("PD94")) return "image/svg+xml";
+    return "application/octet-stream";
+  }
 
   static String quote(String s) {
     StringBuilder b = new StringBuilder("\"");

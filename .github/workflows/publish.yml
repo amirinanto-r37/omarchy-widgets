@@ -1,6 +1,8 @@
 name: publish
 
-# Builds index.json from the reviewed widgets on main and publishes the store to GitHub Pages.
+# Builds index.json from the reviewed widgets on main, and apps.json from the apps, and publishes
+# the store to GitHub Pages. Apps have a catalog of their own so launchers from before them never
+# see one.
 on:
   push:
     branches: [main]
@@ -20,16 +22,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # owl-apps.jar dates each app by the commit that added it.
+          fetch-depth: 0
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
       - name: Catalog
-        run: java -jar tools/owl.jar index .
+        run: |
+          java -jar tools/owl.jar index .
+          java -jar tools/owl-apps.jar index . --apps
       - name: Site
         run: |
           mkdir _site
-          cp -r index.json widgets w _site/
+          cp -r index.json apps.json widgets apps w _site/
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:

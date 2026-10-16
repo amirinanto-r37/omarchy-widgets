@@ -4,7 +4,7 @@ widget "champions-league" {
     description: "UEFA Champions League results, live scores and kick-offs from ESPN with club crests, and the league phase table with knockout places. Tap for every match"
     version: "1.0"
     license: "MIT"
-    category: "world"
+    category: "sport"
   }
   requires { pacman: ["curl", "jq"] }
   page: 1

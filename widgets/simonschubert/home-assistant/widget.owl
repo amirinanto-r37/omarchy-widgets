@@ -1,5 +1,5 @@
 widget "home assistant" {
-  meta { description: "Home Assistant entities with their states; tap a light or switch to toggle it. Set up in ~/.config/omarchy-proot/home-assistant"; version: "1.1"; license: "MIT"; category: "home" }
+  meta { description: "Home Assistant entities with their states; tap a light or switch to toggle it. Set up in ~/.config/omarchy-proot/home-assistant"; version: "1.2"; license: "MIT"; owl: 6; category: "home" }
   size: 6x3
   minSize: 3x2
 
@@ -38,7 +38,7 @@ widget "home assistant" {
           padding: 6
           radius: 6
           background: e.state == "on" ? alpha(accent, 0.2) : surface
-          onTap: run(!toggles ? "true" : "f=~/.config/omarchy-proot/home-assistant; curl -fsm 8 -X POST -H \"Authorization: Bearer $(sed -n 2p $f)\" -H 'Content-Type: application/json' -d '{\"entity_id\": \"${e.id}\"}' \"$(sed -n 1p $f)/api/services/homeassistant/toggle\"")
+          onTap: run(!toggles ? "true" : "f=~/.config/omarchy-proot/home-assistant; curl -fsm 8 -X POST -H \"Authorization: Bearer $(sed -n 2p $f)\" -H 'Content-Type: application/json' -d ${sh('{"entity_id": "' + e.id + '"}')} \"$(sed -n 1p $f)/api/services/homeassistant/toggle\"")
           Text { text: e.name; fontSize: 11; color: muted; maxLines: 1 }
           Text { text: "${e.state} ${e.unit}"; fontSize: 14; color: e.state == "on" ? accent : e.state == "unreachable" ? red : foreground; maxLines: 1 }
         }

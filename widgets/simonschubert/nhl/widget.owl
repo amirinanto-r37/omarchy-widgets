@@ -4,7 +4,7 @@ widget "nhl" {
     description: "NHL scores from ESPN with team logos: live games first, then last night's finals and tonight's puck drops. Tap for every game and both conference standings"
     version: "1.0"
     license: "MIT"
-    category: "world"
+    category: "sport"
   }
   requires { pacman: ["curl", "jq"] }
   page: 1

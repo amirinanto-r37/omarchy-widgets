@@ -1,7 +1,7 @@
 widget "bitcoin" {
   size: 6x2
   minSize: 3x2
-  meta { description: "The bitcoin price in US dollars from Coinbase, with its 24-hour change and chart"; version: "1.0"; license: "MIT"; category: "world"; owl: 5 }
+  meta { description: "The bitcoin price in US dollars from Coinbase, with its 24-hour change and chart"; version: "1.0"; license: "MIT"; category: "finance"; owl: 5 }
 
   // Coinbase's public APIs, no key needed. Spot price every 30 s; 15-minute candles for the chart.
   source spot = http("https://api.coinbase.com/v2/prices/BTC-USD/spot") every 30s timeout 10s json

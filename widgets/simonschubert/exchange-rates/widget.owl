@@ -1,5 +1,5 @@
 widget "exchange rates" {
-  meta { description: "Daily exchange rates from the European Central Bank with a 30-day trend, for the currencies in ~/.config/omarchy-proot/exchange-rates"; version: "1.1"; license: "MIT"; category: "world" }
+  meta { description: "Daily exchange rates from the European Central Bank with a 30-day trend, for the currencies in ~/.config/omarchy-proot/exchange-rates"; version: "1.1"; license: "MIT"; category: "finance" }
   size: 6x2
   minSize: 3x2
 

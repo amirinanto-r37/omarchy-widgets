@@ -1,5 +1,10 @@
 # The order of the store: these widget ids first, in this order; the rest by name;
-# the ids after "..." last. CI applies it when it builds index.json.
+# the ids after "..." last. CI applies it when it builds index.json, and apps.json for apps.
+simonschubert/hn
+simonschubert/notes
+simonschubert/convert
+simonschubert/climbing
+simonschubert/yoga
 simonschubert/earthquakes
 simonschubert/feeds
 simonschubert/github-trending

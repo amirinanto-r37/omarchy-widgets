@@ -9,7 +9,8 @@ pragma ComponentBehavior: Bound
 //   clock            Unix seconds, on the second (or minute) boundary
 //   android.*        what the launcher reads from Android, read here from
 //                    Linux: the battery from UPower, media and the
-//                    device/system/volume command from the OwlHost
+//                    device/system/volume/modes command from the OwlHost;
+//                    alarm is never set, as Linux keeps no next alarm
 //
 // `status` sources (cmd and http) get {out, err, code, ok}, as the language
 // guide has it: the output, stderr, the exit code or HTTP status (124 when it
@@ -31,6 +32,7 @@ Item {
   readonly property bool active: !!root.widget && root.widget.active
   readonly property bool periodic: root.kind === "cmd" || root.kind === "http" || root.kind === "clock"
     || root.kind === "android.device" || root.kind === "android.system" || root.kind === "android.volume"
+    || root.kind === "android.modes"
 
   function push(value) {
     if (root.widget) root.widget.sourceValue(root.spec.slot, value)
@@ -44,7 +46,8 @@ Item {
       return root.push(Number(root.spec.every) >= 1 ? Math.round(Date.now() / 1000) : Date.now() / 1000)
     if (root.kind === "http") return root.fetch()
     if (root.kind === "cmd") return root.exec(String(root.spec.arg()))
-    if (root.kind === "android.device" || root.kind === "android.system" || root.kind === "android.volume")
+    if (root.kind === "android.device" || root.kind === "android.system" || root.kind === "android.volume"
+        || root.kind === "android.modes")
       return root.exec(root.widget.host.sourceCommand(root.kind))
   }
 
@@ -235,16 +238,20 @@ Item {
   readonly property var media: root.kind === "android.media" && root.widget ? root.widget.host.media : null
   onMediaChanged: if (root.active && root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
 
+  readonly property var noAlarm: ({ set: false, time: null, app: null })
+
   onActiveChanged: {
     if (!root.active) return
     if (root.kind === "android.battery") root.widget.sourceObject(root.spec.slot, root.battery)
     if (root.kind === "android.notifications") root.widget.sourceObject(root.spec.slot, [])
+    if (root.kind === "android.alarm") root.widget.sourceObject(root.spec.slot, root.noAlarm)
     if (root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
   }
   Component.onCompleted: {
     if (!root.active) return
     if (root.kind === "android.battery") root.widget.sourceObject(root.spec.slot, root.battery)
     if (root.kind === "android.notifications") root.widget.sourceObject(root.spec.slot, [])
+    if (root.kind === "android.alarm") root.widget.sourceObject(root.spec.slot, root.noAlarm)
     if (root.kind === "android.media") root.widget.sourceObject(root.spec.slot, root.media)
   }
 }
